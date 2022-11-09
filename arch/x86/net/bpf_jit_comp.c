@@ -723,6 +723,7 @@ static void emit_return(u8 **pprog, u8 *ip)
  *   goto *(prog->bpf_func + prologue_size);
  * out:
  */
+/* bpf_tail_call间接（传统）调用部分的jit，可以看出来指令多了不少 */
 static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 					u8 **pprog, bool *callee_regs_used,
 					u32 stack_depth, u8 *ip,
@@ -811,6 +812,7 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	*pprog = prog;
 }
 
+/* bpf_tail_call直接调用部分的jit */
 static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 				      struct bpf_jit_poke_descriptor *poke,
 				      u8 **pprog, u8 *ip,
@@ -1663,6 +1665,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	void __percpu *priv_stack_ptr;
 	int i, excnt = 0;
 	int ilen, proglen = 0;
+	/* prog是用来存放转义后的指令的byte数组 */
 	u8 *prog = temp;
 	u32 stack_depth;
 	int err;
@@ -1679,6 +1682,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
+	/* 翻译准备指令。在进入eBPF指令之前，有一段指令用于准备工作，包括将某些寄存器
+	 * 入栈等。
+	 */
 	emit_prologue(&prog, image, stack_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
 		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
@@ -1714,6 +1720,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	addrs[0] = proglen;
 	prog = temp;
 
+	/* 遍历所有的指令，进行JIT翻译。 */
 	for (i = 1; i <= insn_cnt; i++, insn++) {
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
@@ -2293,6 +2300,7 @@ populate_extable:
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
 			}
+			/* 向prog中添加一条内存加载指令。 */
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
 			    BPF_MODE(insn->code) == BPF_MEMSX)
 				emit_ldsx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
@@ -2461,6 +2469,12 @@ populate_extable:
 			break;
 		}
 
+		/* 进行bpf_tail_call指令的翻译工作，调用emit_bpf_tail_call_direct
+		 * 或者emit_bpf_tail_call_indirect来进行。
+		 *
+		 * 如果可以进行直接调用，那么这里的imm32会被设置成poke_tab的索引，
+		 * 这个是在fixup_bpf_calls中实现的。
+		 */
 		case BPF_JMP | BPF_TAIL_CALL:
 			if (imm32)
 				emit_bpf_tail_call_direct(bpf_prog,

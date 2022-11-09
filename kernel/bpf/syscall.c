@@ -4257,6 +4257,11 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 		return -EINVAL;
 	}
 
+	/* 根据名称进行raw_tracepoint的查找。找到对应的btp后，将该btp注册到
+	 * 对应event的钩子函数中，并把prog的地址作为私有参数，以备后续使用。
+	 *
+	 * 查找过程是遍历btp所在的section，从中找到name与tp_name相同的btp实例。
+	 */
 	btp = bpf_get_raw_tracepoint(tp_name);
 	if (!btp)
 		return -ENOENT;
@@ -4278,6 +4283,10 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 		goto out_put_btp;
 	}
 
+	/* 将prog注册当当前btp对应的tracepoint上。注册的时候，会检查当前eBPF程序
+	 * 对于context的访问有没有超过当前tracepoint的上限，即不大于
+	 * btp->num_args * sizeof(u64)
+	 */
 	err = bpf_probe_register(link->btp, link);
 	if (err) {
 		bpf_link_cleanup(&link_primer);

@@ -6791,29 +6791,41 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	u32 nr_args, arg;
 	int i, ret;
 
+	/* tracing类型的eBPF程序用来检查和转换context内存访问的函数。 */
+
+	/* 由于context的类型的u64[]，因此访问的偏移量必须是8的整数倍（以u64为单位进行访问） */
 	if (off % 8) {
 		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
 			tname, off);
 		return false;
 	}
+	/* 计算出当前访问的是第几个参数 */
 	arg = btf_ctx_arg_idx(btf, t, off);
+	/* args指向函数/tracepoint参数数组 */
 	args = (const struct btf_param *)(t + 1);
-	/* if (t == NULL) Fall back to default BPF prog with
-	 * MAX_BPF_FUNC_REG_ARGS u64 arguments.
-	 */
+	/* 获取目标函数的参数个数 */
 	nr_args = t ? btf_type_vlen(t) : MAX_BPF_FUNC_REG_ARGS;
+
+	/* 如果当前的类型是raw_tp，那么跳过目标函数的第一个参数，因为目标函数（比如
+	 * btf_trace_kfree_skb）的第一个参数并不是tracepoint的参数，而是
+	 * void *__data，从第二个参数开始才是。
+	 */
 	if (prog->aux->attach_btf_trace) {
 		/* skip first 'void *__data' argument in btf_trace_##name typedef */
 		args++;
 		nr_args--;
 	}
 
+	/* eBPF程序访问context的偏移量超过了当前函数的参数长度，非法访问 */
 	if (arg > nr_args) {
 		bpf_log(log, "func '%s' doesn't have %d-th argument\n",
 			tname, arg + 1);
 		return false;
 	}
 
+	/* 尝试访问第n+1个参数。这对于某些加载类型是有意义的，比如FEXIT会把函数返回值
+	 * 放到第n+1个参数中。
+	 */
 	if (arg == nr_args) {
 		switch (prog->expected_attach_type) {
 		case BPF_LSM_MAC:
@@ -6864,15 +6876,25 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		if (!t)
 			/* Default prog with MAX_BPF_FUNC_REG_ARGS args */
 			return true;
+		/* 找到当前要访问的参数的btf_type类型 */
 		t = btf_type_by_id(btf, args[arg].type);
 	}
 
-	/* skip modifiers */
+	/* 跳过修饰器，找到背后真正的类型。像TYPEDEF、CONST这种属于是修饰器，
+	 * 要跳过TYPEDEF，找到真正的（结构体）类型。
+	 */
 	while (btf_type_is_modifier(t))
 		t = btf_type_by_id(btf, t->type);
-	if (btf_type_is_small_int(t) || btf_is_any_enum(t) || btf_type_is_struct(t))
+	/* 如果当前参数的类型是整形或者是枚举类型，那么必定是可以访问的，而且不需要
+	 * 做什么特殊的处理。
+	 */
+	if (btf_type_is_small_int(t) || btf_is_any_enum(t) || __btf_type_is_struct(t))
 		/* accessing a scalar */
 		return true;
+
+	/* 除去整形和枚举，剩下的也就是指针类型了。如果当前参数类型不是指针，那么
+	 * 就是非法访问（内核中应该还没有哪个函数直接把结构体作为参数来传参）。
+	 */
 	if (!btf_type_is_ptr(t)) {
 		bpf_log(log,
 			"func '%s' arg%d '%s' has type %s. Only pointer access is allowed\n",
@@ -6926,6 +6948,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			return true;
 		}
 	}
+
+	/* 下面的代码会把btf信息（包括btf_id）设置到info，从而传递给这个函数的调用者 */
 
 	info->reg_type = PTR_TO_BTF_ID;
 	if (prog_args_trusted(prog))
@@ -6997,7 +7021,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			info->reg_type |= MEM_PERCPU;
 	}
 
-	/* skip modifiers */
+	/* 跳过修饰器 */
 	while (btf_type_is_modifier(t)) {
 		info->btf_id = t->type;
 		t = btf_type_by_id(btf, t->type);
@@ -7332,6 +7356,7 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag, field_name);
 
 		switch (err) {
+		/* 如果在off偏移处找到的是指针或者是整形，那么查找完成。 */
 		case WALK_PTR:
 			/* For local types, the destination register cannot
 			 * become a pointer again.
@@ -7350,9 +7375,21 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		case WALK_SCALAR:
 			return SCALAR_VALUE;
 		case WALK_STRUCT:
-			/* We found nested struct, so continue the search
-			 * by diving in it. At this point the offset is
-			 * aligned with the new type, so set it to 0.
+			/* off偏移落在了结构体内的结构体的开始处。例如，
+			 *
+			 * struct t {
+			 *	char *m;
+			 * };
+			 * struct n {
+			 *	int age;
+			 *	struct t t;
+			 * }
+			 * 
+			 * 当偏移量是offsetof(struct n, t)的时候会命中这种
+			 * 场景。从这里的逻辑可以看出来，下面的代码是行不通的：
+			 * 
+			 *   struct n = { };
+			 *   struct t t = n.t;
 			 */
 			t = btf_type_by_id(btf, id);
 			off = 0;

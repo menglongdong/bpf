@@ -6380,6 +6380,13 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off, int size,
 			    enum bpf_access_type t, struct bpf_insn_access_aux *info)
 {
+	/* 检查当前指令对于内存的访问是否合法，并且初始化一些信息。对于内存访问，reg_type
+	 * 和btf_id分别代表的是源寄存器指向的内存的类型以及结构体的btf_id（对于tracing
+	 * 类型的eBPF程序）。
+	 * 
+	 * 在调用完is_valid_access()之后，目标寄存器的类型和指向的结构体的btf_id
+	 * 会被存储到info中，并作为返回值放到reg_type和btf_id中。
+	 */
 	if (env->ops->is_valid_access &&
 	    env->ops->is_valid_access(off, size, t, env->prog, info)) {
 		/* A non zero info.ctx_field_size indicates that this field is a
@@ -6399,7 +6406,7 @@ static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off,
 		} else {
 			env->insn_aux_data[insn_idx].ctx_field_size = info->ctx_field_size;
 		}
-		/* remember the offset of last byte accessed in ctx */
+		/* 更新当前eBPF程序对于ctx访问的最大偏移量。 */
 		if (env->prog->aux->max_ctx_offset < off + size)
 			env->prog->aux->max_ctx_offset = off + size;
 		return 0;
@@ -7871,9 +7878,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (err)
 			verbose_linfo(env, insn_idx, "; ");
 		if (!err && t == BPF_READ && value_regno >= 0) {
-			/* ctx access returns either a scalar, or a
-			 * PTR_TO_PACKET[_META,_END]. In the latter
-			 * case, we know the offset is zero.
+			/* 将check_ctx_access返回的reg_type设置到目的寄存器中。
+			 * 如果reg_type是PTR_TO_BTF_ID，那么将获取到的btf_id
+			 * 也设置到目的寄存器中。
 			 */
 			if (info.reg_type == SCALAR_VALUE) {
 				if (info.is_retval && get_func_retval_range(env->prog, &range)) {
@@ -9897,6 +9904,12 @@ static int get_constant_map_key(struct bpf_verifier_env *env,
 
 static bool can_elide_value_nullness(enum bpf_map_type type);
 
+/* 
+ * 对helper函数的参数的合法性进行检查，在check_helper_call函数中被调用。其中，
+ * arg代表检查该helper函数的第arg个参数。
+ *
+ * 同时，把一些函数调用相关的元信息设置到meta中，以备在接下来的流程中进行使用。
+ */
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
 			  const struct bpf_func_proto *fn,
@@ -9918,6 +9931,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 	if (arg_type == ARG_ANYTHING) {
+		/* 如果函数参数类型为ANYTHING的话，就只能传SCALAR_VALUE
+		 * 类型的变量？不能传指针哦
+		 */
 		if (is_pointer_value(env, regno)) {
 			verbose(env, "R%d leaks addr into helper function\n",
 				regno);
@@ -9926,6 +9942,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return 0;
 	}
 
+	/* 检查上下文（当前程序类型）是否可以直接访问packet内容。（不能把
+	 * 报文指针传递给helper函数）
+	 */
 	if (type_is_pkt_pointer(type) &&
 	    !may_access_direct_pkt_data(env, meta, BPF_READ)) {
 		verbose(env, "helper access to the packet is not allowed\n");
@@ -9949,6 +9968,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
+	/* 检查当前函数的参数类型与寄存器中的类型是否兼容 */
 	err = check_reg_type(env, regno, arg_type, arg_btf_id, meta);
 	if (err)
 		return err;
@@ -10000,6 +10020,7 @@ skip_type_check:
 		meta->ref_obj_id = reg->ref_obj_id;
 	}
 
+	/* 针对特定的参数类型做特定的检查。 */
 	switch (base_type(arg_type)) {
 	case ARG_CONST_MAP_PTR:
 		/* bpf_map_xxx(map_ptr) call: remember that map_ptr */
@@ -11404,6 +11425,9 @@ static int do_refine_retval_range(struct bpf_verifier_env *env,
 	return reg_bounds_sanity_check(env, ret_reg, "retval");
 }
 
+/* helper函数的参数为map，这里对其进行处理。首先，会进行简单的合法性检查，通过后会
+ * 将map指针保存到当前的指令元数据中记录下来。
+ */
 static int
 record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		int func_id, int insn_idx)
@@ -11450,6 +11474,9 @@ record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+/* 专门用于BPF_FUNC_tail_call函数，将使用到的map中的key保存到当前的指令元数据。
+ * 这里的key可能为非常量，这种情况下会将其保存为BPF_MAP_KEY_POISON以作识别。
+ */
 static int
 record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		int func_id, int insn_idx)
@@ -11678,6 +11705,9 @@ static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 	       in_sleepable(env);
 }
 
+/* 
+ * 处理BPF_CALL类型的指令，即helper函数的调用。
+ */
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -11774,10 +11804,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			return err;
 	}
 
+	/* 将map信息保存到当前指令 */
 	err = record_func_map(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
 
+	/* 将map的key信息保存到当前指令 */
 	err = record_func_key(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
@@ -22825,6 +22857,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			insn->code = BPF_LDX | BPF_MEM | size_code;
 		}
 
+		/* 对于窄访问，将其访问指令替换为对字段的访问（4/8字节）。
+		 * 在访问完成后，再对寄存器中的数据进行位便宜操作，恢复
+		 * 为窄访问的数据。
+		 */
+
 		target_size = 0;
 		cnt = convert_ctx_access(type, insn, insn_buf, env->prog,
 					 &target_size);
@@ -22834,6 +22871,9 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			return -EFAULT;
 		}
 
+		/* 指令里要拷贝的数据长度比真实拷贝到寄存器里的长度小的话，
+		 * 才会进行数据的处理。否则，认为数据不需要进行位操作。
+		 */
 		if (is_narrower_load && size < target_size) {
 			u8 shift = bpf_ctx_narrow_access_offset(
 				off, size, size_default) * 8;
@@ -22841,6 +22881,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				verifier_bug(env, "narrow ctx load misconfigured");
 				return -EFAULT;
 			}
+			/* 计算出来要进行的位便宜的位数。对于大小端，这里还不
+			 * 一样。以对32位数据data的访问为例，如果当前系统是大
+			 * 端，那么((u8 *)data)[0]等于data>>24，即：
+			 * shift = (size_default - (off + size)) * 8
+			 */
 			if (ctx_field_size <= 4) {
 				if (shift)
 					insn_buf[cnt++] = BPF_ALU32_IMM(BPF_RSH,
@@ -23849,6 +23894,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			    !bpf_map_key_poisoned(aux) &&
 			    !bpf_map_ptr_poisoned(aux) &&
 			    !bpf_map_ptr_unpriv(aux)) {
+				/* map和key都是常量（可以确定的），那么将其加入到
+				 * poke列表中。这个poke列表在jit的过程中会使用到
+				 */
 				struct bpf_jit_poke_descriptor desc = {
 					.reason = BPF_POKE_REASON_TAIL_CALL,
 					.tail_call.map = aux->map_ptr_state.map_ptr,
@@ -25102,6 +25150,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	long addr = 0;
 	struct module *mod = NULL;
 
+	/* 该函数用于TRACING类型的eBPF的target检查。它会检查当前eBPF程序要加载
+	 * 到的目标（tracepoint、内核函数等）的类型是否合法。
+	 */
+
 	if (!btf_id) {
 		bpf_log(log, "Tracing programs must provide btf_id\n");
 		return -EINVAL;
@@ -25112,11 +25164,13 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			"FENTRY/FEXIT program can only be attached to another program annotated with BTF\n");
 		return -EINVAL;
 	}
+	/* 根据attach_btf_id找到对应的btf_type */
 	t = btf_type_by_id(btf, btf_id);
 	if (!t) {
 		bpf_log(log, "attach_btf_id %u is invalid\n", btf_id);
 		return -EINVAL;
 	}
+	/* 获取目标的名称（对于raw_tp，这里会是btf_trace_xxx） */
 	tname = btf_name_by_offset(btf, t->name_off);
 	if (!tname) {
 		bpf_log(log, "attach_btf_id %u doesn't have a name\n", btf_id);
@@ -25133,6 +25187,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			return -EINVAL;
 		}
 
+		/* 这里用于检查eBPF弹簧的逻辑，即将eBPF程序（FENTRY、FEXIT）挂载
+		 * 到另一个eBPF程序上。
+		 */
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {
 				subprog = i;
@@ -25237,6 +25294,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				"Only FENTRY/FEXIT progs are attachable to another BPF prog\n");
 			return -EINVAL;
 		}
+		/* RAW_TP的目标必须是typedef类型，且以btf_trace_开头的 */
 		if (!btf_type_is_typedef(t)) {
 			bpf_log(log, "attach_btf_id %u is not a typedef\n",
 				btf_id);
@@ -25247,6 +25305,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				btf_id, tname);
 			return -EINVAL;
 		}
+		/* 跳过前缀btf_trace_，获取到真正的tracepoint的名称 */
 		tname += sizeof(prefix) - 1;
 
 		/* The func_proto of "btf_trace_##tname" is generated from typedef without argument
@@ -25262,6 +25321,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (fname)
 			ret = btf_find_by_name_kind(btf, fname, BTF_KIND_FUNC);
 
+		/* 进行BTF上级查找，即typedef原始的类型，这里应该是函数指针 */
 		if (!fname || ret < 0) {
 			bpf_log(log, "Cannot find btf of tracepoint template, fall back to %s%s.\n",
 				prefix, tname);
@@ -25276,6 +25336,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				return -EINVAL;
 		}
 
+		/* 从函数指针类型再次进行上级查找，获取到函数的btf_type */
 		t = btf_type_by_id(btf, t->type);
 		if (!btf_type_is_func_proto(t))
 			/* should never happen in valid vmlinux build */
@@ -25512,6 +25573,9 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	    prog->type != BPF_PROG_TYPE_EXT)
 		return 0;
 
+	/* 检查目标是否可以attach。对于attach到别的eBPF程序的程序，其必须要提供
+	 * btf_id，用于验证两个程序的参数是否一致。
+	 */
 	ret = bpf_check_attach_target(&env->log, prog, tgt_prog, btf_id, &tgt_info);
 	if (ret)
 		return ret;
