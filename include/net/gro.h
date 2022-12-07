@@ -539,6 +539,7 @@ static inline void gro_normal_one(struct gro_node *gro, struct sk_buff *skb,
 {
 	list_add_tail(&skb->list, &gro->rx_list);
 	gro->rx_count += segs;
+	/* 攒够8个才会一起处理？ */
 	if (gro->rx_count >= READ_ONCE(net_hotdata.gro_normal_batch))
 		gro_normal_list(gro);
 }

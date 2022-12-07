@@ -1139,6 +1139,7 @@ static void tcp_rtt_estimator(struct sock *sk, long mrtt_us)
 			tcp_bpf_rtt(sk, mrtt_us, srtt);
 		}
 	} else {
+		/* 默认情况下，srtt是8倍的rtt；mdev是两倍的rtt */
 		/* no previous measure. */
 		srtt = m << 3;		/* take the measured time to be rtt */
 		tp->mdev_us = m << 1;	/* make sure rto = 3*rtt */
@@ -1155,6 +1156,13 @@ void tcp_update_pacing_rate(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	u64 rate;
+
+	/* 计算发包速率。当前的发包速率可以按照 (mss * cwnd / srtt) 的方式来计算，
+	 * 因为在srtt时间内一个拥塞窗口范围内的字节数可以完成传输。
+	 *
+	 * 在慢启动状态下，把速率设置为计算出来的2倍，因为此时真实的速率的可以比计算
+	 * 出来的大的。在拥塞避免阶段，设置为当前速率的1.2倍。
+	 */
 
 	/* set sk_pacing_rate to 200 % of current rate (mss * cwnd / srtt) */
 	rate = (u64)tp->mss_cache * ((USEC_PER_SEC / 100) << 3);
@@ -3819,7 +3827,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 
 	/* 
 	 * 该函数用于使用到来的ack来确认重传队列中的报文。对于被确认的报文，将其
-	 * 从重传队列中移除并释放。
+	 * 从重传队列中移除并释放，在tcp_ack中被调用。
 	 */
 
 	first_ackt = 0;
@@ -3857,6 +3865,10 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 				tp->retrans_out -= acked_pcount;
 			flag |= FLAG_RETRANS_DATA_ACKED;
 		} else if (!(sacked & TCPCB_SACKED_ACKED)) {
+			/* first_ackt和last_ackt分别是当前rtx队列中第一个被
+			 * 确认的和最后一个被确认的skb的时间戳（不包括被sacked
+			 * 的报文。
+			 */
 			last_ackt = tcp_skb_timestamp_us(skb);
 			WARN_ON_ONCE(last_ackt == 0);
 			if (!first_ackt)
@@ -3911,6 +3923,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 		tcp_rtx_queue_unlink_and_free(skb, sk);
 	}
 
+	/* skb为空，说明已经遍历了rtx队列中的所有数据，rtx里面的数据都被确认了？ */
 	if (!skb)
 		tcp_chrono_stop(sk, TCP_CHRONO_BUSY);
 
@@ -3923,6 +3936,10 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 			flag |= FLAG_SACK_RENEGING;
 	}
 
+	/* 这个时候的tcp_mstamp应该是当前时间哦，收包的时候已经对其进行了更新。
+	 * 所以这里的seq_rtt_us和ca_rtt_us应该分别是第一个和最后一个被ack的
+	 * 报文的时间戳距离现在的时间。
+	 */
 	if (likely(first_ackt) && !(flag & FLAG_RETRANS_DATA_ACKED)) {
 		seq_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, first_ackt);
 		ca_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, last_ackt);

@@ -516,7 +516,7 @@ struct sock {
 		struct timer_list	tcp_retransmit_timer;
 		struct timer_list	mptcp_retransmit_timer;
 	};
-	/* 每秒发送速率（bytes/s），由拥塞控制动态更新。 */
+	/* 计算出来的每秒发送速率（bytes/s），和MSS及RTT相关。 */
 	unsigned long		sk_pacing_rate; /* bytes per second */
 	atomic_t		sk_zckey;
 	atomic_t		sk_tskey;
