@@ -8911,8 +8911,12 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 		return -EINVAL;
 	}
 
+	/* 进行基本eBPF支持的探测，这里会检查内核是否支持SOCKET_FILTER和tracepoint
+	 * 类型的eBPF程序。
+	 */
 	err = bpf_object_prepare_token(obj);
 	err = err ? : bpf_object__probe_loading(obj);
+	/* 加载BTF数据到当前的obj对象。这里只是进行了加载，还没有进行任何的解析。 */
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
 	err = err ? : bpf_object__sanitize_maps(obj);
@@ -12181,6 +12185,10 @@ static int attach_kprobe_multi(const struct bpf_program *prog, long cookie, stru
 	int n;
 
 	*link = NULL;
+
+	/* multi kprobe的attach函数。这里会通过字符串匹配的方式来从kallsyms中找出
+	 * 所有的符号，放到opts中的数组中，通过link_create的eBPF命令来进行挂载。
+	 */
 
 	/* no auto-attach for SEC("kprobe.multi") and SEC("kretprobe.multi") */
 	if (strcmp(prog->sec_name, "kprobe.multi") == 0 ||
