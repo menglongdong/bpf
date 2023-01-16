@@ -90,6 +90,7 @@ int isalpha(int c)
 static __attribute__((unused))
 int isalnum(int c)
 {
+	/* 判断是数字或者是字母 */
 	return isalpha(c) || isdigit(c);
 }
 
