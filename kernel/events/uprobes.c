@@ -1007,6 +1007,10 @@ static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset,
 	RB_CLEAR_NODE(&uprobe->rb_node);
 	refcount_set(&uprobe->ref, 1);
 
+	/* 将uprobe实例插入到全局uprobe的红黑树中。如果该uprobe已经存在于红黑树中，
+	 * 那么会返回它（不插入）；否则，插入它并返回空。这里会通过uprobe的inode
+	 * 和offset来判断其是否已经存在。
+	 */
 	/* add to uprobes_tree, sorted on inode:offset */
 	cur_uprobe = insert_uprobe(uprobe);
 	/* a uprobe exists for this inode:offset combination */

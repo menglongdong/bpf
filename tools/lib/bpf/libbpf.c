@@ -11409,6 +11409,13 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 	struct perf_event_attr attr;
 	int type, pfd;
 
+	/* 使用perf_event_open系统调用来进行perf实例的创建，根据attr中的type值
+	 * 内核可以判断要创建的是kporbe还是uprobe。
+	 *
+	 * 其中，offset用于设置要probe的函数的偏移（对于uprobe的情况）；ref_ctr_off
+	 * 用于设置存储引用计数的那个变量的偏移，该功能用于支持uprobe引用计数功能。
+	 */
+
 	if ((__u64)ref_ctr_off >= (1ULL << PERF_UPROBE_REF_CTR_OFFSET_BITS))
 		return -EINVAL;
 
