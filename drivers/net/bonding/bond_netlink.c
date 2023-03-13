@@ -601,6 +601,10 @@ static int bond_newlink(struct net_device *bond_dev,
 	err = register_netdevice(bond_dev);
 	if (err)
 		return err;
+	
+	/* 创建bond网口。看起来和普通的虚拟网口没啥区别，模式可能和bridge类似吧。
+	 * 创建完成之后会默认处于OFF的状态，需要等待slave的加入来激活它。
+	 */
 
 	netif_carrier_off(bond_dev);
 	bond_work_init_all(bond);

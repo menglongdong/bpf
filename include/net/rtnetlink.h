@@ -137,6 +137,10 @@ static inline struct net *rtnl_newlink_peer_net(struct rtnl_newlink_params *p)
  *			      dumping device-specific extended link stats
  *	@fill_linkxstats: Function to dump device-specific extended link stats
  */
+
+/* 标准（公共）的netlink的钩子函数？包括用来创建、修改、删除等一系列网口操作相关的钩子
+ * 函数的定义。
+ */
 struct rtnl_link_ops {
 	struct list_head	list;
 	struct srcu_struct	srcu;

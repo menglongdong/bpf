@@ -182,6 +182,10 @@ ebt_log_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	struct nf_loginfo li;
 	struct net *net = xt_net(par);
 
+	/* ebtable的log类型的target，在命中目标后可以按照一定的格式（用户可以自定义
+	 * ）来进行日志的打印和输出。
+	 */
+
 	li.type = NF_LOG_TYPE_LOG;
 	li.u.log.level = info->loglevel;
 	li.u.log.logflags = info->bitmask;

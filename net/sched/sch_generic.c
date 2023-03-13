@@ -347,6 +347,10 @@ bool sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	int ret = NETDEV_TX_BUSY;
 	bool again = false;
 
+	/* 不经过队列，直接将报文发送出去。当前函数如果返回false，那么代表直接发送
+	 * 失败，需要对skb进行requeue，从新走队列。
+	 */
+
 	/* And release qdisc */
 	if (root_lock)
 		spin_unlock(root_lock);

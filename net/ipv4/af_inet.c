@@ -1449,6 +1449,7 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 		udpfrag = !!(skb_shinfo(skb)->gso_type & SKB_GSO_UDP);
 
 	ops = rcu_dereference(inet_offloads[proto]);
+	/* 调用四层钩子函数来进行四层协议的分段 */
 	if (likely(ops && ops->callbacks.gso_segment)) {
 		segs = ops->callbacks.gso_segment(skb, features);
 		if (!segs)
@@ -1460,16 +1461,25 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 
 	gso_partial = !!(skb_shinfo(segs)->gso_type & SKB_GSO_PARTIAL);
 
+	/* 下面是三层协议（IP）的分段处理逻辑 */
+
 	skb = segs;
 	do {
 		iph = (struct iphdr *)(skb_mac_header(skb) + nhoff);
 		if (udpfrag) {
+			/* 针对UDP，这里要进行IP的分片，因此这里需要重新计算并设置
+			 * 分片偏移和对应的标志位。
+			 */
 			iph->frag_off = htons(offset >> 3);
 			if (skb->next)
 				iph->frag_off |= htons(IP_MF);
 			offset += skb->len - nhoff - ihl;
 			tot_len = skb->len - nhoff;
 		} else if (skb_is_gso(skb)) {
+			/* fixedid指的是TCP协议在进行分段后，属于同一个skb的不同
+			 * 分段使用相同的id。通过这种方式，接收端可以识别属于同一个
+			 * skb的报文？
+			 */
 			if (!fixedid) {
 				iph->id = htons(id);
 				id += skb_shinfo(skb)->gso_segs;
@@ -1548,6 +1558,10 @@ struct sk_buff *inet_gro_receive(struct list_head *head, struct sk_buff *skb)
 	list_for_each_entry(p, head, list) {
 		struct iphdr *iph2;
 
+		/* 这个same_flow置位1说明是和当前skb属于同一个流（方式有点笨拙哦）。
+		 * 这里在进行判定的时候，没有考虑三层以上的协议，只考虑了mac、nf
+		 * 等因素。
+		 */
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
 

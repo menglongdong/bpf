@@ -123,7 +123,9 @@ static struct sk_buff *tcp4_gso_segment(struct sk_buff *skb,
 		 */
 
 		th->check = 0;
+		/* 代表部分校验码已经计算，也就是四层校验码 */
 		skb->ip_summed = CHECKSUM_PARTIAL;
+		/* 计算TCP校验码 */
 		__tcp_v4_send_check(skb, iph->saddr, iph->daddr);
 	}
 
@@ -178,6 +180,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	/* All segments but the first should have ooo_okay cleared */
 	skb->ooo_okay = 0;
 
+	/* 对skb进行分段。这里的分段实际上是将skb中的聚合分散IO去的数据取出来，构造
+	 * 成一个skb链表，链表中的每个skb数据的长度都不超过mss。
+	 */
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs))
 		goto out;
@@ -205,6 +210,7 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 
 	ecn_cwr_mask = !!(skb_shinfo(gso_skb)->gso_type & SKB_GSO_TCP_ACCECN);
 
+	/* 遍历skb链表，设置其中的校验码和序列号等信息。 */
 	while (skb->next) {
 		th->fin = th->psh = 0;
 		th->check = newcheck;

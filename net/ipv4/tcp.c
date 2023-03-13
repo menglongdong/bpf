@@ -3357,6 +3357,9 @@ void __tcp_close(struct sock *sk, long timeout)
 adjudge_to_death:
 	state = sk->sk_state;
 	sock_hold(sk);
+	/* 在调用完close之后，此时sk应该处于FIN_WAIT1的状态。可以看出来，此时sk已经
+	 * 要进入到DEAD状态了。
+	 */
 	sock_orphan(sk);
 
 	local_bh_disable();

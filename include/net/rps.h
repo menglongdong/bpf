@@ -75,6 +75,10 @@ static inline void rps_record_sock_flow(struct rps_sock_flow_table *table,
 	unsigned int index = hash & table->mask;
 	u32 val = hash & ~net_hotdata.rps_cpu_mask;
 
+	/* 记录当前流到全局rps哈希表中。这里哈希表中存储的内容是：
+	 * 高位存储了哈希值，地位存储了CPU信息
+	 */
+
 	/* We only give a hint, preemption can change CPU under us */
 	val |= raw_smp_processor_id();
 

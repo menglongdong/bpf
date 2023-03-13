@@ -354,6 +354,7 @@ struct gro_list {
  * @cached_napi_id: napi_struct::napi_id cached for hotpath, 0 for standalone
  */
 struct gro_node {
+	/* 和下面的gro_hash对应的，标志着哈希表中哪个位置存在数据 */
 	unsigned long		bitmask;
 	/* 用于保存属于不同的流的skb的哈希表。这是一个链表式哈希表，每个数组中存储的
 	 * 都是一个链表，以链表的形式将skb保存起来。对于TCP协议，这个哈希表中的
@@ -3552,6 +3553,7 @@ struct softnet_data {
 	/* input_queue_head should be written by cpu owning this struct,
 	 * and only read by other cpus. Worth using a cache line.
 	 */
+	/* 当前的CPU所处理的backlog上的报文数量，没处理完一个就行给这个计数器+1 */
 	unsigned int		input_queue_head ____cacheline_aligned_in_smp;
 
 	/* Elements below can be accessed between CPUs for RPS/RFS */
@@ -5406,6 +5408,9 @@ static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 
 static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 {
+	/* 检查网卡驱动支持的特性是否满足gso_type的要求（GSO-TCP,GSO-UDP等），
+	 * 并且检查网卡驱动是否支持链表（还能这样？）
+	 */
 	return net_gso_ok(features, skb_shinfo(skb)->gso_type) &&
 	       (!skb_has_frag_list(skb) || (features & NETIF_F_FRAGLIST));
 }
@@ -5413,6 +5418,9 @@ static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 static inline bool netif_needs_gso(struct sk_buff *skb,
 				   netdev_features_t features)
 {
+	/* skb是GSO类型的skb，并且网卡驱动特性不满足GSO的要求，那么就需要进行软件
+	 * 分段。
+	 */
 	return skb_is_gso(skb) && (!skb_gso_ok(skb, features) ||
 		unlikely((skb->ip_summed != CHECKSUM_PARTIAL) &&
 			 (skb->ip_summed != CHECKSUM_UNNECESSARY)));

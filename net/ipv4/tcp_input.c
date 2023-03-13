@@ -96,6 +96,9 @@ int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 #define FLAG_LOST_RETRANS	0x80 /* This ACK marks some retransmission lost */
 #define FLAG_SLOWPATH		0x100 /* Do not skip RFC checks for window update.*/
 #define FLAG_ORIG_SACK_ACKED	0x200 /* Never retransmitted data are (s)acked	*/
+/* 这个和FLAG_DATA_ACKED的区别在于两者的时机不同。FLAG_DATA_ACKED会在重传队列处理完成
+ * 后被打上，而这个标志会在ack的早期阶段被打上。可以说，这个是FLAG_DATA_ACKED的前提。
+ */
 #define FLAG_SND_UNA_ADVANCED	0x400 /* Snd_una was changed (!= FLAG_DATA_ACKED) */
 #define FLAG_DSACKING_ACK	0x800 /* SACK blocks contained D-SACK info */
 #define FLAG_SET_XMIT_TIMER	0x1000 /* Set TLP or RTO timer */
@@ -3742,6 +3745,13 @@ void tcp_rearm_rto(struct sock *sk)
 /* Try to schedule a loss probe; if that doesn't work, then schedule an RTO. */
 static void tcp_set_xmit_timer(struct sock *sk)
 {
+	/* 重启超时重传定时器。这个函数一般会在有新的数据被确认了，需要重置超时重传定时器。
+	 * 这里会尝试先启用TLP算法，设置loss probe定时器。
+	 *
+	 * loss probe只有在拥塞状态正常、重传队列里面有数据的时候才会启动。这个函数是
+	 * 在tcp_ack里被调用的，当有新的数据被发送出去的时候，RTO定时器会被设置上，
+	 * 取代loss probe。
+	 */
 	if (!tcp_schedule_loss_probe(sk, true))
 		tcp_rearm_rto(sk);
 }
@@ -4013,12 +4023,26 @@ static void tcp_ack_probe(struct sock *sk)
 	struct sk_buff *head = tcp_send_head(sk);
 	const struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 这个函数是0窗口的触发和解除函数。如果当前的发送窗口过小导致报文不能发送，那么
+	 * 就会开启probe定时器。
+	 *
+	 * 否则，就会去清除probe定时器。（这里是不是需要先检查一下当前是否处于probe
+	 * 状态，而不是无脑取消？）
+	 * 
+	 * probe定时器的超时处理函数为 tcp_probe_timer ，它会进行probe报文的超时
+	 * 重传（丢包）以及probe的重试（持续进行probe）。
+	 * 
+	 * 除此之外，还会在__tcp_push_pending_frames()里面主动检测是否需要进行0
+	 * 窗口探测。
+	 */
+
 	/* Was it a usable window open? */
 	if (!head)
 		return;
+
 	/* 发送队列（尚未发送的数据）的第一个报文在接收方的窗口范围内，那么说明当前
 	 * 不是0窗口了，可以取消probe定时器了。否则，重置probe超时定时器，继续
-	 * 
+	 * 进行0窗口的探测。
 	 */
 	if (!after(TCP_SKB_CB(head)->end_seq, tcp_wnd_end(tp))) {
 		icsk->icsk_backoff = 0;
@@ -4089,6 +4113,15 @@ static inline bool tcp_may_update_window(const struct tcp_sock *tp,
 					const u32 ack, const u32 ack_seq,
 					const u32 nwin)
 {
+	/* 在以下情况下（满足其中一个即可）认为是可以进行窗口更新的：
+	 * - 这个ack不是一个老的ack（ack的是最后的数据，即确认了新的数据，重复ack也不行）
+	 * - 这个报文的序列号是个新的序列号（snd_wl1存储了上一次窗口更新时的seq号），
+	 *   即后续接收到了新的数据
+	 * - 这个序列号和之前的一样，只不过新窗口变大了
+	 * 
+	 * 也就是说，这个报文要是确认了新的数据，或者携带了新的数据，那么就会无条件更新
+	 * 窗口；否则，它只能扩大窗口。
+	 */
 	return	after(ack, tp->snd_una) ||
 		after(ack_seq, tp->snd_wl1) ||
 		(ack_seq == tp->snd_wl1 && (nwin > tp->snd_wnd || !nwin));
@@ -4525,9 +4558,9 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (after(ack, prior_snd_una)) {
 		/* 
 		 * 一个有效的ack，确认了新的数据。此时，将拥塞控制中的重传计数清零。
-		 * 这里加上标志，代表SND_UND发生了变化，单不代表新数据被确认了。
+		 * 这里加上标志，代表SND_UND发生了变化，但不代表新数据被确认了。
 		 * 在下面的tcp_clean_rtx_queue中，会对重传队列中的报文进行确认，
-		 * 那么时候会加上新数据被确认的标志。
+		 * 那时候会加上新数据被确认的标志。
 		 */
 		flag |= FLAG_SND_UNA_ADVANCED;
 		WRITE_ONCE(icsk->icsk_retransmits, 0);
@@ -4550,11 +4583,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 
 	if ((flag & (FLAG_SLOWPATH | FLAG_SND_UNA_ADVANCED)) ==
 	    FLAG_SND_UNA_ADVANCED) {
-		/* Window is constant, pure forward advance.
-		 * No more checks are required.
-		 * Note, we use the fact that SND.UNA>=SND.WL2.
+		/* 快速路径，且存在新的数据被确认了，更新引发窗口更新的序列号。快速
+		 * 路径代表着报文中的窗口信息没有发生变化，因此可以直接使用原来的
+		 * 接收窗口大小。
 		 */
-		/* 更新引发窗口更新的序列号 */
 		tcp_update_wl(tp, ack_seq);
 		/* 更新snd_una */
 		tcp_snd_una_update(tp, ack);
@@ -4600,10 +4632,14 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		WRITE_ONCE(sk->sk_err_soft, 0);
 	WRITE_ONCE(icsk->icsk_probes_out, 0);
 	tp->rcv_tstamp = tcp_jiffies32;
+
+	/* 当前重传队列中没有数据，那么就不需要进行数据的ACK，直接进入到下面的0窗口
+	 * probe的处理流程。
+	 */
 	if (!prior_packets)
 		goto no_queue;
 
-	/* 查看当前ACK是否能够确认重传队列中的报文。 */
+	/* 查看当前ACK是否能够确认重传队列中的报文。这里会更新 packets_out*/
 	flag |= tcp_clean_rtx_queue(sk, skb, prior_fack, prior_snd_una,
 				    &sack_state, flag & FLAG_ECE);
 
@@ -4672,9 +4708,7 @@ no_queue:
 		tcp_newly_delivered(sk, delivered, ecn_count, flag);
 	}
 
-	/* 如果当前的ack报文打开了零窗口（窗口大小变得不是0了），那么就会取消probe
-	 * 定时器，同时
-	 */
+	/* 进行0窗口的处理 */
 	tcp_ack_probe(sk);
 
 	if (unlikely(tp->tlp_high_seq))
@@ -5996,6 +6030,7 @@ queue_and_out:
 			sk_forced_mem_schedule(sk, skb->truesize);
 		}
 
+		/* eaten代表的是是否将报文上的数据折叠到收包队列末尾的skb上了。 */
 		eaten = tcp_queue_rcv(sk, skb, &fragstolen);
 		if (skb->len)
 			tcp_event_data_recv(sk, skb);
@@ -6879,6 +6914,12 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	PSH flag is ignored.
 	 */
 
+	/* 进入到快速路径处理的条件：
+	 * - 报文没有乱序（是下一个要接收的报文）
+	 * - 报文的ack号正常
+	 * - 当前报文的flag标志符合预期
+	 * - 当前流没有出现乱序（没有空洞）
+	 */
 	if ((tcp_flag_word(th) & TCP_HP_BITS) == tp->pred_flags &&
 	    TCP_SKB_CB(skb)->seq == tp->rcv_nxt &&
 	    !after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) {

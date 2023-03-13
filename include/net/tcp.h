@@ -912,6 +912,13 @@ static inline u32 tcp_min_rtt(const struct tcp_sock *tp)
  */
 static inline u32 tcp_receive_window(const struct tcp_sock *tp)
 {
+	/* 动态计算出来的当前接收窗口的大小。它可以理解为：
+	 * 接收窗口大小 - 还未来得及发送ack的数据大小
+	 *
+	 * 这里是不是认为，还没有发送ack的报文还处于接收窗口内，因此要占用
+	 * 一部分的接收窗口？根据传统的TCP协议，收到的连续数据不应当被认为处于
+	 * 接收窗口内的。
+	 */
 	s32 win = tp->rcv_wup + tp->rcv_wnd - tp->rcv_nxt;
 
 	if (win < 0)
@@ -1062,6 +1069,7 @@ enum tcp_skb_cb_sacked_flags {
  */
 struct tcp_skb_cb {
 	__u32		seq;		/* Starting sequence number	*/
+	/* 最后一个字节的序列号+1，并不是最后一个字节的序列号 */
 	__u32		end_seq;	/* SEQ + FIN + SYN + datalen	*/
 	union {
 		/* Note :
@@ -1524,7 +1532,7 @@ static inline __u32 tcp_max_tso_deferred_mss(const struct tcp_sock *tp)
 	return 3;
 }
 
-/* 返回接收方的接收窗口右边界 */
+/* 返回接收方的接收窗口右边界（不包含当前这个序列，即当前窗口的最后一个序列是 -1 的 */
 static inline u32 tcp_wnd_end(const struct tcp_sock *tp)
 {
 	return tp->snd_una + tp->snd_wnd;

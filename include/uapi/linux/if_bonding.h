@@ -64,12 +64,18 @@
 
 #define BOND_CHECK_MII_STATUS	(SIOCGMIIPHY)
 
+/* bond网口默认的模式，即采用RR的模式来进行负载均衡，轮流将报文发给各个slave */
 #define BOND_MODE_ROUNDROBIN	0
+/* backup的模式，一个网口出现故障后自动启用其他的网口 */
 #define BOND_MODE_ACTIVEBACKUP	1
+/* XOR模式的负载均衡（具有容错的能力？） */
 #define BOND_MODE_XOR		2
+/* 广播模式（发给每一个网口），用于提升稳定性（冗余） */
 #define BOND_MODE_BROADCAST	3
 #define BOND_MODE_8023AD        4
+/* 自适应发送负载均衡 */
 #define BOND_MODE_TLB           5
+/* 自适应发送和接收负载均衡 */
 #define BOND_MODE_ALB		6 /* TLB + RLB (receive load balancing) */
 
 /* each slave's link has 4 states */

@@ -210,6 +210,7 @@ struct tcp_sock {
 	u32	rcv_ssthresh;	/* Current window clamp			*/
 	u32	reordering;	/* Packet reordering metric.		*/
 	u32	notsent_lowat;	/* TCP_NOTSENT_LOWAT */
+	/* 一个skb中能够存储的seg最大数量 */
 	u16	gso_segs;	/* Max number of segs per GSO packet	*/
 	/* from STCP, retrans queue hinting */
 	struct sk_buff *retransmit_skb_hint;

@@ -101,6 +101,9 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 		tp->highest_sack = skb;
 
 	tp->packets_out += tcp_skb_pcount(skb);
+	/* 如果之前重传队列里面没有数据（没有RTO定时器）或者当前处于loss probe
+	 * 状态，那么设置RTO定时器。
+	 */
 	if (!prior_packets || icsk->icsk_pending == ICSK_TIME_LOSS_PROBE)
 		tcp_rearm_rto(sk);
 
@@ -297,6 +300,7 @@ static u16 tcp_select_window(struct sock *sk)
 	}
 
 	cur_win = tcp_receive_window(tp);
+	/* 根据内存等信息所计算出来的窗口大小 */
 	new_win = __tcp_select_window(sk);
 	if (new_win < cur_win) {
 		/* Danger Will Robinson!
@@ -314,6 +318,12 @@ static u16 tcp_select_window(struct sock *sk)
 		}
 	}
 
+	/* 刷新当前的接收窗口为真实的窗口。如果new_win > cur_win，说明当前内存允许
+	 * 进一步扩大窗口；否则，那么cur_win就是old_win减去当前接收到的报文长度。
+	 *
+	 * 这里可以简单地理解为：如果用户态没有收包，那么cur_win会比old_win小，当前
+	 * 窗口会越来越小；如果用户态收包了，那么new_win会变大，当前窗口也会跟着变大。
+	 */
 	tp->rcv_wnd = new_win;
 	tp->rcv_wup = tp->rcv_nxt;
 
@@ -3152,6 +3162,10 @@ repair:
 			tcp_schedule_loss_probe(sk, false);
 		return false;
 	}
+
+	/* 在传数据为0，且发送队列中存在数据，说明数据已经无法发送出去（不能传递到L3层），
+	 * 可能是当前处于0窗口状态。此时会返回true，调用者这里可以进行0窗口的probe
+	 */
 	return !tp->packets_out && !tcp_write_queue_empty(sk);
 }
 
@@ -3308,6 +3322,12 @@ void __tcp_push_pending_frames(struct sock *sk, unsigned int cur_mss,
 	if (unlikely(sk->sk_state == TCP_CLOSE))
 		return;
 
+	/* 进行报文的发送。如果发送失败，那么有可能是因为0窗口导致的，这时需要检查
+	 * 是否需要进行0窗口探测。
+	 *
+	 * 这里是唯一是主动进行0窗口探测的地方，除此之外还会通过ack驱动的方式出发
+	 * 0窗口探测。
+	 */
 	if (tcp_write_xmit(sk, cur_mss, nonagle, 0,
 			   sk_gfp_mask(sk, GFP_ATOMIC)))
 		tcp_check_probe_timer(sk);
@@ -3394,6 +3414,10 @@ u32 __tcp_select_window(struct sock *sk)
 	/* 当前套接口sk_rcvbuf可以容纳的数据量 */
 	int allowed_space = tcp_full_space(sk);
 	int full_space, window;
+
+	/* 根据当前内存等因素进行TCP接收窗口的选择与确定。这里根据协议，一旦窗口
+	 * 大小确定，就不能对齐进行缩减？
+	 */
 
 	if (sk_is_mptcp(sk))
 		mptcp_space(sk, &free_space, &allowed_space);
@@ -3664,6 +3688,14 @@ start:
 	cur_mss = tcp_current_mss(sk);
 	avail_wnd = tcp_wnd_end(tp) - TCP_SKB_CB(skb)->seq;
 
+	/* 当前这个报文的数据全部都在窗口的右边界之外，并且当前报文不是第一个要重传的数据，
+	 * 那么不发送它。也就是说，在当前窗口为0，且当前skb是第一个要重传的报文，这时会
+	 * 进行报文的重传。这一般是由于窗口缩减造成，这里它就会起到probe的作用。但是
+	 * 这里依然会在重传次数达到上限后断链，不能代替0窗口probe。
+	 * 
+	 * 只要这个报文存在数据在窗口范围内，或者当前报文是第一个，那么都可以对其进
+	 * 重传。
+	 */
 	/* If receiver has shrunk his window, and skb is out of
 	 * new window, do not retransmit it. The exception is the
 	 * case, when window is shrunk to zero. In this case
@@ -4672,6 +4704,11 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 	if (sk->sk_state == TCP_CLOSE)
 		return -1;
 
+	/* probe报文发送函数（probe 0 或者 keepalive）。首先这里会先检测发送队列中
+	 * 的报文是否存在一定的窗口可以进行发送了，是的话就直接发送那部分数据。否则，
+	 * 会发送probe报文。
+	 */
+
 	skb = tcp_send_head(sk);
 	if (skb && before(TCP_SKB_CB(skb)->seq, tcp_wnd_end(tp))) {
 		int err;
@@ -4701,8 +4738,10 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 			tcp_event_new_data_sent(sk, skb);
 		return err;
 	} else {
+		/* 判断是否要发送紧急模式的报文（紧急模式？） */
 		if (between(tp->snd_up, tp->snd_una + 1, tp->snd_una + 0xFFFF))
 			tcp_xmit_probe_skb(sk, 1, mib);
+		/* 发送常规的probe报文，即重传已经被确认的最后一个字节。 */
 		return tcp_xmit_probe_skb(sk, 0, mib);
 	}
 }
@@ -4718,9 +4757,12 @@ void tcp_send_probe0(struct sock *sk)
 	unsigned long timeout;
 	int err;
 
-	/* 进行probe报文的重传。 */
+	/* 进行probe报文的发送或者重传。这里，其实probe报文发送和重传没有什么本质
+	 * 区别，因为新的probe报文和重传的都是一样的。
+	 */
 	err = tcp_write_wakeup(sk, LINUX_MIB_TCPWINPROBE);
 
+	/* 检查是否还需要继续进行probe，需要的话下面会重置probe的定时器。 */
 	if (tp->packets_out || tcp_write_queue_empty(sk)) {
 		/* Cancel probe timer, if it is not required. */
 		WRITE_ONCE(icsk->icsk_probes_out, 0);

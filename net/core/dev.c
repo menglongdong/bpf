@@ -4184,7 +4184,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 			 * of q->seqlock to protect from racing with requeuing.
 			 */
 			if (unlikely(!nolock_qdisc_is_empty(q))) {
+				/* 调用对应的Qos队列入方法，加入到对应队列。 */
 				rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
+				/* 触发Qos的运行。 */
 				__qdisc_run(q);
 				to_free2 = qdisc_run_end(q);
 
@@ -4247,15 +4249,15 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		llist_for_each_entry_safe(skb, next, ll_list, ll_node)
 			__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;
-		goto unlock;
-	}
-	if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
-	    !llist_next(ll_list) && qdisc_run_begin(q)) {
-		/*
-		 * This is a work-conserving queue; there are no old skbs
-		 * waiting to be sent out; and the qdisc is not running -
-		 * xmit the skb directly.
-		 */
+			goto unlock;
+		}
+		if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
+		    !llist_next(ll_list) && qdisc_run_begin(q)) {
+			/*
+			 * This is a work-conserving queue; there are no old skbs
+			 * waiting to be sent out; and the qdisc is not running -
+			 * xmit the skb directly.
+			 */
 
 		DEBUG_NET_WARN_ON_ONCE(skb != llist_entry(ll_list,
 							  struct sk_buff,
@@ -4584,6 +4586,11 @@ static int __get_xps_queue_idx(struct net_device *dev, struct sk_buff *skb,
 	struct xps_map *map;
 	int queue_index = -1;
 
+	/* 这个函数用于从一个xps_dev_maps类型的map中查找（计算）出来一个队列的索引。
+	 * 其中，dev_maps->attr_map是以CPU为索引建立的到xps_map的结构。而
+	 * xps_map结构中又通过动态数组的方式存储了当前CPU上所有的队列。
+	 */
+
 	if (tc >= dev_maps->num_tc || tci >= dev_maps->nr_ids)
 		return queue_index;
 
@@ -4619,8 +4626,18 @@ static int get_xps_queue(struct net_device *dev, struct net_device *sb_dev,
 	if (!static_key_false(&xps_rxqs_needed))
 		goto get_cpus_map;
 
+	/* rxq部分的代码。常规的xps会通过哈希的方式，将报文投递到当前CPU映射到的队列
+	 * 中的一个。而rxq则是建立了rx队列和tx队列之间的映射关系，将报文投递到
+	 * 报文的收包队列映射到的发包队列中的一个。
+	 * 
+	 * 如果没有找到合适的队列，那么调用者会直接将报文哈希到某个队列上（CPU无关）。
+	 */
 	dev_maps = rcu_dereference(sb_dev->xps_maps[XPS_RXQS]);
 	if (dev_maps) {
+		/* 这里的tci获取到的是套接口上记录的sk_rx_queue_mapping，表示的
+		 * 是当前套接口对应的收包队列的索引。因为一般一个流会对应一个收包
+		 * 队列，因此可以把这个信息持久化地保存到套接口上。
+		 */
 		int tci = sk_rx_queue_get(sk);
 
 		if (tci >= 0)
@@ -4632,6 +4649,9 @@ get_cpus_map:
 	if (queue_index < 0) {
 		dev_maps = rcu_dereference(sb_dev->xps_maps[XPS_CPUS]);
 		if (dev_maps) {
+			/* 这里的sender_cpu记录的是发送skb的CPU。这里取出该
+			 * CPU上的map，并哈希出对应的队列。
+			 */
 			unsigned int tci = skb->sender_cpu - 1;
 
 			queue_index = __get_xps_queue_idx(dev, skb, dev_maps,
@@ -4792,7 +4812,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 #ifdef CONFIG_NET_EGRESS
 	/*
 	 * 如果定义了EGRESS类型的队列，那么将其交给EGRESS处理。
-	 * 这种类型的队列不进行任何流量控制，单纯地为EBPFi留下
+	 * 这种类型的队列不进行任何流量控制，单纯地为EBPF留下
 	 * HOOK点而已。
 	 */
 	if (static_branch_unlikely(&egress_needed_key)) {
@@ -5133,6 +5153,33 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 	if (!hash)
 		goto done;
 
+	/* 这里会首先检查是否启用了RFS功能。其中，sock_flow_table是全局哈希表，
+	 * 通过/proc/sys/net/core/rps_sock_flow_entries设置，记录的是用户态
+	 * 收包进程所处的CPU。
+	 * 
+	 * flow_table是通过网卡队列的rps_flow_cnt参数设置的，只有在sock_flow_table
+	 * 和flow_table都启用了的情况下，才会进入到RFS的流程。
+	 * 
+	 * 这里需要关注两个CPU指标：用户CPU和设备CPU。设备CPU指的是内核用来处理报文
+	 * 的CPU，也就是经过负载均衡当前处理这个流的CPU；用户CPU指的是进行收包的
+	 * 用户进程所在的CPU，这个CPU可能会随着进程调度而迁移到别的CPU上。而RFS的
+	 * 目标就是将报文负载均衡到用户CPU上，也就是将设备CPU切换成用户CPU，从而
+	 * 降低报文处理的时延和cache miss。
+	 * 
+	 * 用户CPU是通过rps_sock_flow_table这个全局哈希表来记录的，其存储了每个流对应
+	 * 的CPU。设备CPU是通过每个网卡队列上的局部哈希表flow_table来记录的。
+	 * 
+	 * 当用户CPU和设备CPU不同的时候，会尝试在以下情况下将设备CPU切换成用户CPU（
+	 * 保证将报文放到用户进程所在的CPU，提升cache命中率）：
+	 * - 设备CPU下线了
+	 * - 设备CPU上面的报文都已经处理完成了，切换CPU不会导致乱序出现
+	 * 
+	 * 如何判断这个CPU上的当前流的报文都处理完成了？每个CPU上的softnet_data存储了
+	 * 两个值：input_queue_head - 当前CPU上已经处理的报文数据；
+	 * input_queue_tail - 当前CPU上已经处理和将要处理的报文数量。当前流上的
+	 * last_qtail记录着这个流所看到的最后的input_queue_tail值。如果这个值
+	 * <= input_queue_head，那么说明当前流的报文肯定已经处理完成了。
+	 */
 	sock_flow_table = rcu_dereference(net_hotdata.rps_sock_flow_table);
 	if (flow_table && sock_flow_table) {
 		struct rps_dev_flow *rflow;
@@ -5142,14 +5189,31 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		/* First check into global flow table if there is a match.
 		 * This READ_ONCE() pairs with WRITE_ONCE() from rps_record_sock_flow().
 		 */
+		/* 还没有记录到用户CPU，那么就不需要考虑CPU迁移的问题，直接使用
+		 * map中的cpu信息进行哈希。
+		 */
 		ident = READ_ONCE(sock_flow_table->ents[hash & sock_flow_table->mask]);
+		/* 检查哈希表中对应的实体是不是属于这个流的，哈希表中的实体可能会因为
+		 * 哈希冲突，而被别的流占用。一旦被占用，那么就按照传统的方式进行哈希。
+		 * （不会乱序吗？）
+		 * 
+		 * 假如这里ents的长度为1，有进程A/B交替收包，那么A在收包期间，其CPU
+		 * 会频繁从用户CPU直接切换到原始哈希CPU，而没有保证时序性？需要做个
+		 * 实验。
+		 * 
+		 * 经过实验，这里的确会产生强烈的实例竞争问题，多个进程可能哈希到同一个
+		 * 实例上，从而产生相互影响，造成乱序。一旦发生冲突，rps的CPU就会从
+		 * 用户CPU直接切换到原始CPU。
+		 */
 		if ((ident ^ hash) & ~net_hotdata.rps_cpu_mask)
 			goto try_rps;
 
 		next_cpu = ident & net_hotdata.rps_cpu_mask;
 
-		/* OK, now we know there is a match,
-		 * we can look at the local (per receive queue) flow table
+		/* 这里的流不代表一个连接，所有的哈希目标相同的连接都会共享同一个rflow
+		 * 对象。也就是说，共享同一个rflow的连接，其设备CPU都一样。这里由于
+		 * 设置了序列检查，所以不会产生竞争的问题？只有在序列检查OK的情况下，
+		 * 才会进行设备CPU的切换。
 		 */
 		rflow = &flow_table->flows[rfs_slot(hash, flow_table)];
 		tcpu = rflow->cpu;
@@ -5170,11 +5234,14 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		     ((int)(READ_ONCE(per_cpu(softnet_data, tcpu).input_queue_head) -
 		      rflow->last_qtail)) >= 0)) {
 			tcpu = next_cpu;
-			rflow = set_rps_cpu(dev, skb, rflow, next_cpu, hash);
+			/* 采用用户 CPU，并更新设备 CPU 到用户 CPU 的映射。 */
+			rflow = set_rps_cpu(dev, skb, rflow, next_cpu, hash,
+					    flow_id);
 		}
 
 		if (tcpu < nr_cpu_ids && cpu_online(tcpu)) {
 			*rflowp = rflow;
+			/* 这样搞的话，岂不是可以突破rps_cpus的限制了？ */
 			cpu = tcpu;
 			goto done;
 		}
@@ -5182,6 +5249,9 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 
 try_rps:
 
+	/* 对于未启用RFS功能的队列（rps_flow_cnt没有设置），这里会简单地从备选CPU中
+	 * 哈希出来一个CPU，也就是RPS的逻辑。
+	 */
 	if (map) {
 		tcpu = map->cpus[reciprocal_scale(hash, map->len)];
 		if (cpu_online(tcpu)) {
@@ -5749,6 +5819,8 @@ int netif_rx(struct sk_buff *skb)
 	bool need_bh_off = !(hardirq_count() | softirq_count());
 	int ret;
 
+	/* 这个函数一般在不支持NAPI的网卡驱动中调用（上半部） */
+
 	if (need_bh_off)
 		local_bh_disable();
 	trace_netif_rx_entry(skb);
@@ -5764,6 +5836,7 @@ static __latent_entropy void net_tx_action(void)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
 
+	/* 完成队列？有些网卡驱动会把处理完的报文放到这个队列里，等待tx的时候统一释放 */
 	if (sd->completion_queue) {
 		struct sk_buff *clist;
 
@@ -5792,6 +5865,7 @@ static __latent_entropy void net_tx_action(void)
 		}
 	}
 
+	/* 进行报文的发送。这里没有进行budget限制，可以持续性的进行发包？ */
 	if (sd->output_queue) {
 		struct Qdisc *head;
 
@@ -6461,6 +6535,12 @@ void netif_receive_skb_list_internal(struct list_head *head)
 int netif_receive_skb(struct sk_buff *skb)
 {
 	int ret;
+
+	/* 网卡驱动的POLL函数里会调用这个函数来进行报文的处理。同时，根据需要，网卡
+	 * 驱动也可能会调用napi_gro_receive()这个函数，根据是否需要进行GRO操作。
+	 *
+	 * 相当于这个函数是直接进行收包的，没有任何的额外操作。
+	 */
 
 	trace_netif_receive_skb_entry(skb);
 
@@ -7734,6 +7814,9 @@ static int __napi_poll(struct napi_struct *n, bool *repoll)
 	 */
 	work = 0;
 	if (napi_is_scheduled(n)) {
+		/* 调用网卡驱动上的POLL函数进行底层的报文收包。常规情况下，在准备好
+		 * 数据后，网卡驱动会将skb交给 napi_gro_receive 函数处理。
+		 */
 		work = n->poll(n, weight);
 		trace_napi_poll(n, work, weight);
 
@@ -7744,6 +7827,7 @@ static int __napi_poll(struct napi_struct *n, bool *repoll)
 		netdev_err_once(n->dev, "NAPI poll function %pS returned %d, exceeding its budget of %d.\n",
 				n->poll, work, weight);
 
+	/* 网卡驱动处理的报文数量没有达到budget，直接结束poll流程。 */
 	if (likely(work < weight))
 		return work;
 
@@ -7956,15 +8040,17 @@ start:
 				if (!sd_has_rps_ipi_waiting(sd))
 					goto end;
 			}
+			/* list为空，没有待调用的napi */
 			break;
 		}
 
+		/* 取list链表中的第一个napi元素 */
 		n = list_first_entry(&list, struct napi_struct, poll_list);
+		/* napi_poll：执行n->poll轮询函数，并返回处理的skb的数量。 */
 		budget -= napi_poll(n, &repoll);
 
-		/* If softirq window is exhausted then punt.
-		 * Allow this to run for 2 jiffies since which will allow
-		 * an average latency of 1.5/HZ.
+		/* 检查本次软中断的配额是否用尽。为了避免软中断长期占用CPU，规定一次中断只能
+		 * 处理netdev_budget个skb，该值默认为300。当配额用尽时，停止网络流量的处理。
 		 */
 		if (unlikely(budget <= 0 ||
 			     time_after_eq(jiffies, time_limit))) {
@@ -7979,6 +8065,10 @@ start:
 	list_splice_tail_init(&sd->poll_list, &list);
 	list_splice_tail(&repoll, &list);
 	list_splice(&list, &sd->poll_list);
+
+	/* poll_list中有未处理完的napi，说明配额用尽了，触发NET_RX_SOFTIRQ，在下一次软中断
+	 * 中继续处理（暂时把CPU让给别人）。
+	 */
 	if (!list_empty(&sd->poll_list))
 		__raise_softirq_irqoff(NET_RX_SOFTIRQ);
 	else

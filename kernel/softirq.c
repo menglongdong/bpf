@@ -486,6 +486,13 @@ static inline bool should_wake_ksoftirqd(void)
 
 static inline void invoke_softirq(void)
 {
+	/* 软中断的执行（入口）函数。首先判断当前CPU上的软中断线程是否正在运行，没有运行的话
+	 * 就根据当前是否启用了强制软中断线程来决定是唤醒线程还是直接执行。
+	 *
+	 * 当前函数是在进程切换期间被调用的，如果执行了__do_softirq，那么就会进入软中断
+	 * 上下文中。
+	 */
+
 	if (!force_irqthreads() || !__this_cpu_read(ksoftirqd)) {
 #ifdef CONFIG_HAVE_IRQ_EXIT_ON_IRQ_STACK
 		/*
@@ -585,6 +592,8 @@ static void handle_softirqs(bool ksirqd)
 	bool in_hardirq;
 	__u32 pending;
 	int softirq_bit;
+
+	/* 软中断真正的执行函数，软中断线程和软中断上下文中执行的都是这个函数。 */
 
 	/*
 	 * Mask out PF_MEMALLOC as the current task context is borrowed for the
@@ -781,7 +790,7 @@ void raise_softirq(unsigned int nr)
 	unsigned long flags;
 
 	/* 触发软中断。将软中断标志位置位，同时如果当前不是在中断上下文，那么唤醒
-	 * 软中断中断，从而使得软中断能够得到快速的处理。
+	 * 软中断线程，从而使得软中断能够得到快速的处理。
 	 */
 
 	local_irq_save(flags);
@@ -1062,6 +1071,7 @@ static int ksoftirqd_should_run(unsigned int cpu)
 	return local_softirq_pending();
 }
 
+/* 软中断线程的执行函数 */
 static void run_ksoftirqd(unsigned int cpu)
 {
 	ksoftirqd_run_begin();
