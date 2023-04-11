@@ -1523,10 +1523,12 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 
 	memcpy(mm, oldmm, sizeof(*mm));
 
+	/* 进程mm的初始化，包括pgd页表的内存分配等。 */
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 
 	uprobe_start_dup_mmap();
+	/* 进行vma的拷贝 */
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;
@@ -1575,6 +1577,7 @@ static int copy_mm(u64 clone_flags, struct task_struct *tsk)
 	if (!oldmm)
 		return 0;
 
+	/* 设置了CLONE_VM，那么会进行内存的共享（创建的是线程） */
 	if (clone_flags & CLONE_VM) {
 		mmget(oldmm);
 		mm = oldmm;
@@ -1693,6 +1696,17 @@ static void posix_cpu_timers_init_group(struct signal_struct *sig)
 static int copy_signal(u64 clone_flags, struct task_struct *tsk)
 {
 	struct signal_struct *sig;
+
+	/**
+	 * 内核有两个信号队列，分别是task->pending和sig->shared_pending。
+	 * 前者代表线程私有的信号队列，后者是线程组共享的。
+	 * 如果使用的是kill，那么信号会被放到shared_pending中；使用tkill，
+	 * 信号会被放到pending中。
+	 *
+	 * 线程组中所有的线程共享信号处理函数，但是可以拥有自己的信号屏蔽掩码。
+	 * 对于shared_pending中的信号，内核会优先选取线程组中的主线程来处理。
+	 * 如果主线程繁忙，则会选取其他线程来处理。 
+	 */
 
 	if (clone_flags & CLONE_THREAD)
 		return 0;
@@ -1967,6 +1981,24 @@ __latent_entropy struct task_struct *copy_process(
 					int node,
 					struct kernel_clone_args *args)
 {
+	/**
+	 * stack_start和stack_size分别是用户态传递进来的用作新的进程的栈的地址和
+	 * 大小。通过这种方式，允许新进程在创建好后运行特定的代码，比如用户态可以
+	 * 对栈里面的内容做修改，指定新进程的入口函数，这也是c库里面的标准用法：
+	 * 
+	 *        int clone(int (*fn)(void *), void *stack, int flags, void *arg, ...
+         *        * pid_t *parent_tid, void *tls, pid_t *child_tid* );
+	 * 
+	 * 实际上，stack_size只有创建内核进程的时候才会有用，用户进程没有使用到。
+	 * 
+	 * 可以看出来，C库对clone系统调用进行了封装，其中fn为新进程要运行的函数，
+	 * arg为要传递给该函数的参数，其他地方与原始clone相同。这也是clone与fork
+	 * 最大的区别：fork创建的新进程只能继续运行当前代码（调用fork后面的代码）
+	 * 
+	 * 在不指定stack的情况下，内核会默认做内存拷贝。可以看出，如果不指定stack，
+	 * 那么是不能指定CLONE_VM的，不然会出现两个进程共用一个栈的情况，引起混乱。
+	 **/
+
 	int pidfd = -1, retval;
 	struct task_struct *p;
 	struct multiprocess_signals delayed;
@@ -2047,6 +2079,7 @@ __latent_entropy struct task_struct *copy_process(
 		goto fork_out;
 
 	retval = -ENOMEM;
+	/* 做一份当前进程的task_struct拷贝：先从slab里分配个task_struct和栈，再进行一些初始化设置 */
 	p = dup_task_struct(current, node);
 	if (!p)
 		goto fork_out;
@@ -2067,12 +2100,15 @@ __latent_entropy struct task_struct *copy_process(
 	if (args->name)
 		strscpy_pad(p->comm, args->name, sizeof(p->comm));
 
+	/* 将用户态用来存储线程id的地址存储下来（还不知道要用来干啥）。 */
 	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? args->child_tid : NULL;
 	/*
-	 * TID is cleared in mm_release() when the task exits
+	 * 将用户态child_tidptr的地址存储下来。任务退出时会在mm_release()
+	 * 对该TID做清理。
 	 */
 	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? args->child_tid : NULL;
 
+	/* tracepoint点 */
 	ftrace_graph_init_task(p);
 
 	rt_mutex_init_task(p);
@@ -2081,11 +2117,13 @@ __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_PROVE_LOCKING
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
+	/* 拷贝授权信息 */
 	retval = copy_creds(p, clone_flags);
 	if (retval < 0)
 		goto bad_fork_free;
 
 	retval = -EAGAIN;
+	/* 当前进程创建进程（线程）的上限超过了rlimit的设置 */
 	if (is_rlimit_overlimit(task_ucounts(p), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC))) {
 		if (p->real_cred->user != INIT_USER &&
 		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
@@ -2099,6 +2137,7 @@ __latent_entropy struct task_struct *copy_process(
 	 * to stop root fork bombs.
 	 */
 	retval = -EAGAIN;
+	/* 检查进程数量有没有超过上限 */
 	if (data_race(nr_threads >= max_threads))
 		goto bad_fork_cleanup_count;
 
@@ -2107,6 +2146,7 @@ __latent_entropy struct task_struct *copy_process(
 	p->flags |= PF_FORKNOEXEC;
 	INIT_LIST_HEAD(&p->children);
 	INIT_LIST_HEAD(&p->sibling);
+	/* 初始化任务RCU锁 */
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
 	spin_lock_init(&p->alloc_lock);
@@ -2139,6 +2179,7 @@ __latent_entropy struct task_struct *copy_process(
 	p->psi_flags = 0;
 #endif
 
+	/* 初始化IO统计信息 */
 	task_io_accounting_init(&p->ioac);
 	acct_clear_integrals(p);
 
@@ -2147,6 +2188,7 @@ __latent_entropy struct task_struct *copy_process(
 
 	p->io_context = NULL;
 	audit_set_context(p, NULL);
+	/* 初始化cgroup信息 */
 	cgroup_fork(p);
 	if (args->kthread) {
 		if (!set_kthread_struct(p))
@@ -2189,43 +2231,66 @@ __latent_entropy struct task_struct *copy_process(
 
 	unwind_task_init(p);
 
-	/* Perform scheduler related setup. Assign this task to a CPU. */
+	/* 初始化调度相关的参数，将任务状态改为TASK_NEW，并将其添加到当前CPU */
 	retval = sched_fork(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_policy;
 
+	/* perf初始化 */
 	retval = perf_event_init_task(p, clone_flags);
 	if (retval)
 		goto bad_fork_sched_cancel_fork;
 	retval = audit_alloc(p);
 	if (retval)
 		goto bad_fork_cleanup_perf;
-	/* copy all the process information */
+	/* 共享内存，初始化变量 */
 	shm_init_task(p);
 	retval = security_task_alloc(p, clone_flags);
 	if (retval)
 		goto bad_fork_cleanup_audit;
+	/* 如果设置了CLONE_SYSVSEM标志，那么子进程与当前进程共享信号量列表。 */
 	retval = copy_semundo(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_security;
+	/* 根据是否设置了CLONE_FILES来判断是否拷贝当前进程的打开文件列表（默认拷贝）。
+	 * 如果设置了，那么将共享打开文件列表。
+	 */
 	retval = copy_files(clone_flags, p, args->no_files);
 	if (retval)
 		goto bad_fork_cleanup_semundo;
+	/* 如果设置了CLONE_FS，那么父子进程将共享文件系统（包括根、当前工作目录）；
+	 * 否则，会做一份当前fs_struct的拷贝
+	 */
 	retval = copy_fs(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_files;
+
+	/* 注意：如果设置了CLONE_THREAD，那么CLONE_SIGHAND和CLONE_VM同样会被设置。
+	 * 这是合理的，因为就我们所知，线程组内的所有线程共享内存和信号。
+	 */
+
+	/* 如果设置了CLONE_SIGHAND，那么共享信号处理程序；否则，做一份拷贝。 */
 	retval = copy_sighand(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_fs;
+	/* 如果设置了CLONE_THREAD（线程），那么父子共享信号；否则做一份拷贝。 */
 	retval = copy_signal(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_sighand;
+	/* 如果设置了CLONE_VM，那么父子共享内存；否则，做一份页表的拷贝。 */
 	retval = copy_mm(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_signal;
+	/* 检查是否存在以下标志：
+	 * CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
+			      CLONE_NEWPID | CLONE_NEWNET |
+			      CLONE_NEWCGROUP
+	 * 存在的话，则为其创建对应的命名空间；否则，直接使用当前进程的命名空间。
+	 */
 	retval = copy_namespaces(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_mm;
+	/* 通过是否设置CLONE_IO来决定是否共享块设备IO上下文。 */
 	retval = copy_io(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_namespaces;
@@ -2236,6 +2301,7 @@ __latent_entropy struct task_struct *copy_process(
 	stackleak_task_init(p);
 
 	if (pid != &init_struct_pid) {
+		/* 为新进程分配pid */
 		pid = alloc_pid(p->nsproxy->pid_ns_for_children, args->set_tid,
 				args->set_tid_size);
 		if (IS_ERR(pid)) {
@@ -2272,14 +2338,13 @@ __latent_entropy struct task_struct *copy_process(
 	futex_init_task(p);
 
 	/*
-	 * sigaltstack should be cleared when sharing the same VM
+	 * 如果设置了CLONE_VM且没有设置CLONE_VFORK，那么初始化sas_ss。
 	 */
 	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
 		sas_ss_reset(p);
 
 	/*
-	 * Syscall tracing and stepping should be turned off in the
-	 * child regardless of CLONE_PTRACE.
+	 * 禁用新进程的trace以及单步调试等功能。
 	 */
 	user_disable_single_step(p);
 	clear_task_syscall_work(p, SYSCALL_TRACE);
@@ -2313,12 +2378,7 @@ __latent_entropy struct task_struct *copy_process(
 	p->rethooks.first = NULL;
 #endif
 
-	/*
-	 * Ensure that the cgroup subsystem policies allow the new process to be
-	 * forked. It should be noted that the new process's css_set can be changed
-	 * between here and cgroup_post_fork() if an organisation operation is in
-	 * progress.
-	 */
+	/* 分别调用每个cgroup子系统的can_fork回调函数来简单当前是否可以进行fork */
 	retval = cgroup_can_fork(p, args);
 	if (retval)
 		goto bad_fork_put_pidfd;
@@ -2358,18 +2418,27 @@ __latent_entropy struct task_struct *copy_process(
 	 * stalling fork(2) after we recorded the start_time but before it is
 	 * visible to the system.
 	 */
+	/* 
+	 * 下面要获取tasklist_lock锁了，在此之前该进程对于用户是不可见的。
+	 * 禁止在此之前用户与该进程的通信。
+	 */
 
 	p->start_time = ktime_get_ns();
 	p->start_boottime = ktime_get_boottime_ns();
 
 	/*
-	 * Make it visible to the rest of the system, but dont wake it up yet.
-	 * Need tasklist lock for parent etc handling!
+	 * 获取tasklist_lock锁，来将其变得对于其他子系统可见。
 	 */
 	write_lock_irq(&tasklist_lock);
 
-	/* CLONE_PARENT re-uses the old parent */
+	/* 正确设置进程的父进程。 */
 	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
+		/* 如果设置了CLONE_PARENT，那么新进程的父进程将会设置为当前进程的父进程；
+		 * 否则（默认情况下）父进程会设置为当前进程。
+		 */
+		/* 这里可以看出，线程的退出信号为-1，进程（或者是线程组的leader）的退出
+		 * 信号为clone_flags，可以通过退出信号是否小于0来判断其是否是进程。
+		 */
 		p->real_parent = current->real_parent;
 		p->parent_exec_id = current->parent_exec_id;
 		if (clone_flags & CLONE_THREAD)
@@ -2392,13 +2461,13 @@ __latent_entropy struct task_struct *copy_process(
 
 	rseq_fork(p, clone_flags);
 
-	/* Don't start children in a dying pid namespace */
+	/* 如果进程的命名空间即将销毁，那么不容许再创建进程 */
 	if (unlikely(!(ns_of_pid(pid)->pid_allocated & PIDNS_ADDING))) {
 		retval = -ENOMEM;
 		goto bad_fork_core_free;
 	}
 
-	/* Let kill terminate clone/fork in the middle */
+	/* 再次检查当前进程是否收到KILL信号，允许在fork中途被打断。 */
 	if (fatal_signal_pending(current)) {
 		retval = -EINTR;
 		goto bad_fork_core_free;
@@ -2407,26 +2476,38 @@ __latent_entropy struct task_struct *copy_process(
 	/* No more failure paths after this point. */
 
 	/*
-	 * Copy seccomp details explicitly here, in case they were changed
-	 * before holding sighand lock.
+	 * 拷贝seccomp，一个安全相关的机制，能够限制进程使用哪些系统调用。
 	 */
 	copy_seccomp(p);
 
+	/* 初始化pid_links。进程会通过该数组与其他进程产生各种关联。 */
 	init_task_pid_links(p);
 	if (likely(p->pid)) {
+		/* 初始化该进程的ptrace功能。 */
 		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
+
+		/* 下面的代码会设置进程与其他进程的各种关联。 */
 
 		init_task_pid(p, PIDTYPE_PID, pid);
 		if (thread_group_leader(p)) {
+			/* 如果是线程组的leader（即p是进程），运行下面的初始化。 */
+
+			/* 将线程组pid设置成自己 */
 			init_task_pid(p, PIDTYPE_TGID, pid);
+			/* 设置p的进程组和会话为当前进程的进程组和会话 */
 			init_task_pid(p, PIDTYPE_PGID, task_pgrp(current));
 			init_task_pid(p, PIDTYPE_SID, task_session(current));
 
+			/* 如果p是其进程命名空间的第一个进程，那么就将其设置为
+			 * child_reaper（孩子收割者？）并且不可被kill掉
+			 */
 			if (is_child_reaper(pid)) {
 				ns_of_pid(pid)->child_reaper = p;
 				p->signal->flags |= SIGNAL_UNKILLABLE;
 			}
+			/* 设置延迟的信号 */
 			p->signal->shared_pending.signal = delayed.signal;
+			/* 设置p的伪终端为当前进程的伪终端 */
 			p->signal->tty = tty_kref_get(current->signal->tty);
 			/*
 			 * Inherit has_child_subreaper flag under the same
@@ -2435,6 +2516,9 @@ __latent_entropy struct task_struct *copy_process(
 			 */
 			p->signal->has_child_subreaper = p->real_parent->signal->has_child_subreaper ||
 							 p->real_parent->signal->is_child_subreaper;
+			/* 将p添加到父进程的链表以及init进程的链表。
+			 * 整个过程都是在tasklist_lock受保护期间进行的。
+			 */
 			list_add_tail(&p->sibling, &p->real_parent->children);
 			list_add_tail_rcu(&p->tasks, &init_task.tasks);
 			attach_pid(p, PIDTYPE_TGID);
@@ -2442,6 +2526,7 @@ __latent_entropy struct task_struct *copy_process(
 			attach_pid(p, PIDTYPE_SID);
 			__this_cpu_inc(process_counts);
 		} else {
+			/* 如果是线程的话，处理比较简单，因为基本上都是与当前进程共享的。 */
 			current->signal->nr_threads++;
 			current->signal->quick_threads++;
 			atomic_inc(&current->signal->live);
@@ -2459,15 +2544,20 @@ __latent_entropy struct task_struct *copy_process(
 	syscall_tracepoint_update(p);
 	write_unlock_irq(&tasklist_lock);
 
+	/* 到这里，tasklist_lock解开了，进程已经用户可见了。 */
+
 	if (pidfile)
 		fd_install(pidfd, pidfile);
 
+	/* 初始化进程的proc接口 */
 	proc_fork_connector(p);
 	sched_post_fork(p);
+	/* 将p添加到父进程的cgroup中 */
 	cgroup_post_fork(p, args);
 	perf_event_fork(p);
 
 	trace_task_newtask(p, clone_flags);
+	/* 初始化uprobe相关的内容 */
 	uprobe_copy_process(p, clone_flags);
 	user_events_fork(p, clone_flags);
 
