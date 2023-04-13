@@ -448,6 +448,7 @@ static inline pudval_t pud_flags(pud_t pud)
 	return native_pud_val(pud) & pud_flags_mask(pud);
 }
 
+/* 获取纯地址的掩码，即去掉含有标志位的那些位的掩码 */
 static inline pmdval_t pmd_pfn_mask(pmd_t pmd)
 {
 	if (native_pmd_val(pmd) & _PAGE_PSE)
@@ -503,6 +504,7 @@ static inline pgprot_t pgprot_4k_2_large(pgprot_t pgprot)
 }
 static inline pgprotval_t protval_large_2_4k(pgprotval_t val)
 {
+	/* 去除原来的_PAGE_PAT标志，并将_PAGE_PAT_LARGE修改为_PAGE_PAT */
 	return (val & ~(_PAGE_PAT | _PAGE_PAT_LARGE)) |
 		((val & _PAGE_PAT_LARGE) >>
 		 (_PAGE_BIT_PAT_LARGE - _PAGE_BIT_PAT));

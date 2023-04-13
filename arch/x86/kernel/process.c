@@ -179,10 +179,17 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	int ret = 0;
 
 	childregs = task_pt_regs(p);
+	/* 获取新进程的栈帧，其结构类型为fork_frame。它在顶部包含了用户态寄存器，紧
+	 * 接着是下一个要执行的（内核）函数，也就是ret_addr。
+	 */
 	fork_frame = container_of(childregs, struct fork_frame, regs);
 	frame = &fork_frame->frame;
 
 	frame->bp = encode_frame_pointer(childregs);
+	/* 进程被创建（fork）后，接下来要运行的（内核）代码。ret_from_fork是一个
+	 * 架构相关的函数，对于x86，它会调用schedule_tail()，然后调用
+	 * syscall_exit_to_user_mode()返回到用户态。
+	 */
 	frame->ret_addr = (unsigned long) ret_from_fork_asm;
 	p->thread.sp = (unsigned long) fork_frame;
 	p->thread.io_bitmap = NULL;

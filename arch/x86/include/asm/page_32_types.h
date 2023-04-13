@@ -20,6 +20,7 @@
 #define __START_KERNEL_map	__PAGE_OFFSET
 
 #define THREAD_SIZE_ORDER	1
+/* 进程在内核态的栈大小。2个页了？ */
 #define THREAD_SIZE		(PAGE_SIZE << THREAD_SIZE_ORDER)
 
 #define IRQ_STACK_SIZE		THREAD_SIZE

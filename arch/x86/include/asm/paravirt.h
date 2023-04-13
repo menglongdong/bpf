@@ -390,6 +390,7 @@ static inline pmd_t __pmd(pmdval_t val)
 					  "mov %%rdi, %%rax", ALT_NOT_XEN) };
 }
 
+/* 获取pmd对应的物理内存 */
 static inline pmdval_t pmd_val(pmd_t pmd)
 {
 	return PVOP_ALT_CALLEE1(pmdval_t, pv_ops, mmu.pmd_val, pmd.pmd,

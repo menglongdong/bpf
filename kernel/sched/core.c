@@ -5205,6 +5205,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 asmlinkage __visible void schedule_tail(struct task_struct *prev)
 	__releases(__rq_lockp(this_rq()))
 {
+
+	/* 这个函数会在进程被fork出来后，首先被调用。 */
+
 	/*
 	 * New tasks start with FORK_PREEMPT_COUNT, see there and
 	 * finish_task_switch() for details.

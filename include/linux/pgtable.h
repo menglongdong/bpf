@@ -1398,12 +1398,16 @@ static inline void arch_swap_restore(swp_entry_t entry, struct folio *folio)
  * vma end wraps to 0, rounded up __boundary may wrap to 0 throughout.
  */
 
+/* addr地址加上一个PGD的长度 */
 #define pgd_addr_end(addr, end)						\
 ({	unsigned long __boundary = ((addr) + PGDIR_SIZE) & PGDIR_MASK;	\
 	(__boundary - 1 < (end) - 1)? __boundary: (end);		\
 })
 
 #ifndef p4d_addr_end
+/* p4d是为了进行5级页表的兼容而做的。对于不支持5级页表的系统，这里的P4D_SIZE和
+ * PGDIR_SIZE是完全一样的。
+ */
 #define p4d_addr_end(addr, end)						\
 ({	unsigned long __boundary = ((addr) + P4D_SIZE) & P4D_MASK;	\
 	(__boundary - 1 < (end) - 1)? __boundary: (end);		\

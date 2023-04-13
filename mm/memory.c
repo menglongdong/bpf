@@ -463,10 +463,12 @@ void pmd_install(struct mm_struct *mm, pmd_t *pmd, pgtable_t *pte)
 
 int __pte_alloc(struct mm_struct *mm, pmd_t *pmd)
 {
+	/* 分配一个page，并返回其指针，就是这里的new。 */
 	pgtable_t new = pte_alloc_one(mm);
 	if (!new)
 		return -ENOMEM;
 
+	/* 将pmd指向new实例。 */
 	pmd_install(mm, pmd, &new);
 	if (new)
 		pte_free(mm, new);
@@ -1100,6 +1102,7 @@ static __always_inline void __copy_present_ptes(struct vm_area_struct *dst_vma,
 
 	/* If it's a COW mapping, write protect it both processes. */
 	if (is_cow_mapping(src_vma->vm_flags) && pte_write(pte)) {
+		/* 清除父进程pte上的可写标准，同时设置子进程的pte为写保护 */
 		wrprotect_ptes(src_mm, addr, src_pte, nr);
 		pte = pte_wrprotect(pte);
 	}
@@ -1239,13 +1242,8 @@ again:
 	progress = 0;
 	init_rss_vec(rss);
 
-	/*
-	 * copy_pmd_range()'s prior pmd_none_or_clear_bad(src_pmd), and the
-	 * error handling here, assume that exclusive mmap_lock on dst and src
-	 * protects anon from unexpected THP transitions; with shmem and file
-	 * protected by mmap_lock-less collapse skipping areas with anon_vma
-	 * (whereas vma_needs_copy() skips areas without anon_vma).  A rework
-	 * can remove such assumptions later, but this is good enough for now.
+	/* 在进行pte拷贝期间，源pte和目标pte都加上了锁。对于fork的情况，这里似乎
+	 * 不需要？不存在竞争的情况吧，因为子进程还没跑起来。
 	 */
 	dst_pte = pte_alloc_map_lock(dst_mm, dst_pmd, addr, &dst_ptl);
 	if (!dst_pte) {
@@ -1455,6 +1453,9 @@ copy_p4d_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	p4d_t *src_p4d, *dst_p4d;
 	unsigned long next;
 
+	/* 从顶级页表里面获取（当前dst_pgd有效）或者分配一个p4d表。如果从新分配了的话，
+	 * 会将地址赋值给dst_pgd。
+	 */
 	dst_p4d = p4d_alloc(dst_mm, dst_pgd, addr);
 	if (!dst_p4d)
 		return -ENOMEM;
@@ -1513,6 +1514,8 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	bool is_cow;
 	int ret;
 
+	/* 将一个vma中所有的page页表拷贝到另一个vma中 */
+
 	if (!vma_needs_copy(dst_vma, src_vma))
 		return 0;
 
@@ -1546,6 +1549,12 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	dst_pgd = pgd_offset(dst_mm, addr);
 	src_pgd = pgd_offset(src_mm, addr);
 	do {
+		/* 遍历这个vma中所有的pgd实例，调用copy_p4d_range分别对遍历到的
+		 * pgd实例进行拷贝。这里遍历的原理是：pgd指针每次往后+1，并且地址
+		 * 增加一个单位（对于PGD，就是地址增加一个PGD对应的范围）。
+		 * 
+		 * 在地址到达末尾后，终止遍历过程。
+		 */
 		next = pgd_addr_end(addr, end);
 		if (pgd_none_or_clear_bad(src_pgd))
 			continue;
@@ -5237,6 +5246,15 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	/* Use the zero-page for reads */
 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
 			!mm_forbids_zeropage(vma->vm_mm)) {
+
+		/* 这里使用的是0页技术。当用户尝试读取没有被映射的内存区域，且当前内存
+		 * 区域是匿名映射的，那么其实这个时候不需要进行页表的映射，只需要返回
+		 * 一个被特殊填充的页帧即可。这里，对于x86，其使用的是一个
+		 * empty_zero_page页。
+		 * 
+		 * 也就是说，这里没有真正的分配页帧，而是想等到真正需要的时候才进行页帧
+		 * 的分配。
+		 */
 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
 						vma->vm_page_prot));
 		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,

@@ -3315,6 +3315,7 @@ static inline pud_t *pud_alloc(struct mm_struct *mm, p4d_t *p4d,
 		NULL : pud_offset(p4d, address);
 }
 
+/* 这里分配pmd指的是分配一个pud对应的pmd表，应该是分配了512个pmd实例。 */
 static inline pmd_t *pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 {
 	return (unlikely(pud_none(*pud)) && __pmd_alloc(mm, pud, address))?
@@ -3572,6 +3573,10 @@ pte_t *pte_offset_map_rw_nolock(struct mm_struct *mm, pmd_t *pmd,
 	pte_unmap(pte);					\
 } while (0)
 
+/* 当前的pmd为空（没有指向有效的pte表），那么会调用 __pte_alloc 进行pte表的分配，
+ * 同时将分配的pte表的指针赋值给pmd。这里只是分配了一个page（一个pte实例），而不是
+ * 分配pte表？
+ */
 #define pte_alloc(mm, pmd) (unlikely(pmd_none(*(pmd))) && __pte_alloc(mm, pmd))
 
 #define pte_alloc_map(mm, pmd, address)			\

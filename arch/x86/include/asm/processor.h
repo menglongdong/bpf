@@ -645,6 +645,9 @@ static __always_inline void prefetchw(const void *x)
 
 #define task_top_of_stack(task) ((unsigned long)(task_pt_regs(task) + 1))
 
+/* 获取存储在栈的顶部的寄存器的值。这里的寄存器指的是用户态寄存器，进程在由用户态陷入
+ * 内核态的时候，会把寄存器的值先入栈。同时，这个指针+1也代表着当前内核栈的栈顶。
+ */
 #define task_pt_regs(task) \
 ({									\
 	unsigned long __ptr = (unsigned long)task_stack_page(task);	\

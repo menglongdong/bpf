@@ -13,7 +13,9 @@
 /* Cast P*D_MASK to a signed type so that it is sign-extended if
    virtual addresses are 32-bits but physical addresses are larger
    (ie, 32-bit PAE). */
+/* 物理内存的掩码，对于4k页的大小，这里就是xxx000，就是最后的12位是0 */
 #define PHYSICAL_PAGE_MASK	(((signed long)PAGE_MASK) & __PHYSICAL_MASK)
+/* 将一级pmd作为一个页的大小，即 512*4k，2M作为页大小。 */
 #define PHYSICAL_PMD_PAGE_MASK	(((signed long)PMD_MASK) & __PHYSICAL_MASK)
 #define PHYSICAL_PUD_PAGE_MASK	(((signed long)PUD_MASK) & __PHYSICAL_MASK)
 

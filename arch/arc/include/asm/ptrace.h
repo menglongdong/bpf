@@ -82,6 +82,7 @@ struct pt_regs {
 	unsigned long DSP_CTRL;
 #endif
 
+	/* 如果当前在内核态，那么这个是用户态当前堆栈地址 */
 	unsigned long sp;	/* user/kernel sp depending on entry  */
 
 	/*------- Below list auto saved by h/w -----------*/

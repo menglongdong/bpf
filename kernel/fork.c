@@ -332,6 +332,7 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
 	struct vm_struct *vm_area;
 	void *stack;
 
+	/* 尝试从cache里面进行stack的分配，分配不到的话再走下面的流程。 */
 	vm_area = alloc_thread_stack_node_from_cache(tsk, node);
 	if (vm_area) {
 		if (memcg_charge_kernel_stack(vm_area)) {
@@ -921,6 +922,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	if (err)
 		goto free_tsk;
 
+	/* 给进程分配一个内核态的栈，这里并没有对栈做什么内存赋值 */
 	err = alloc_thread_stack_node(tsk, node);
 	if (err)
 		goto free_tsk;
@@ -944,6 +946,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->seccomp.filter = NULL;
 #endif
 
+	/* 初始化thread_info结构体。这个结构体在栈的尾部，里面存储了一些基本信息。 */
 	setup_thread_stack(tsk, orig);
 	clear_user_return_notifier(tsk);
 	clear_tsk_need_resched(tsk);
