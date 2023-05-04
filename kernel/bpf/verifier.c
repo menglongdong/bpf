@@ -5312,6 +5312,9 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 
 	check_fastcall_stack_contract(env, state, insn_idx, off);
 	mark_stack_slot_scratched(env, spi);
+	/* 寄存器是一个有边界的数值，且写的偏移8字节对齐，且数值不是0，那么就对这个寄存器
+	 * 进行spill，即将寄存器的信息与这个栈内存的关联起来。
+	 */
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
 		bool reg_value_fits;
 
@@ -5332,7 +5335,9 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		tmp_reg->type = SCALAR_VALUE;
 		save_register_state(env, state, spi, tmp_reg, size);
 	} else if (reg && is_spillable_regtype(reg->type)) {
-		/* register containing pointer is being spilled into stack */
+		/* 如果寄存器是可spill的类型（保存的是各种指针类型），且不是stack类型
+		 * 的指针，那么也可以对其进行spill。
+		 */
 		if (size != BPF_REG_SIZE) {
 			verbose_linfo(env, insn_idx, "; ");
 			verbose(env, "invalid size of register spill\n");
@@ -5764,6 +5769,10 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	int err;
 	/* Some accesses are only permitted with a static offset. */
 	bool var_off = !tnum_is_const(reg->var_off);
+
+	/* 栈读操作检查。这里的ptr_regno存放的是栈指针的寄存器，dst_regno存放的是
+	 * 目的寄存器。这里会根据读取的偏移是否是常量来进行不同的检查。
+	 */
 
 	/* The offset is required to be static when reads don't go to a
 	 * register, in order to not leak pointers (see
@@ -7912,7 +7921,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		}
 
 	} else if (reg->type == PTR_TO_STACK) {
-		/* Basic bounds checks. */
+		/* 检查栈内存读写操作。这里首先会检查栈内存读写操作没有越界，然后再进行
+		 * 具体的读写检查。
+		 */
 		err = check_stack_access_within_bounds(env, regno, off, size, t);
 		if (err)
 			return err;
