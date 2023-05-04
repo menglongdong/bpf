@@ -16,9 +16,19 @@
 extern "C" {
 #endif
 
+/* .BTF里面存储了当前程序中所使用到的BTF信息，包括结构体、数组等信息：
+ *
+ * BTF_KIND_INT
+ * BTF_KIND_PTR
+ * BTF_KIND_ARRAY
+ * BTF_KIND_STRUCT
+ *
+ */
 #define BTF_ELF_SEC ".BTF"
+/* 这里存储的是函数以及对应的代码行等信息，是CO-RE必备的内容 */
 #define BTF_EXT_ELF_SEC ".BTF.ext"
 #define BTF_BASE_ELF_SEC ".BTF.base"
+/* 通过BTF方式所定义的map */
 #define MAPS_ELF_SEC ".maps"
 
 struct btf;

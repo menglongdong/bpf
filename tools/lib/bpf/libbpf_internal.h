@@ -504,12 +504,14 @@ struct btf_ext {
 	};
 	void *data_swapped;
 	bool swapped_endian;
+	/* ext里面存储的line、func和重定位信息 */
 	struct btf_ext_info func_info;
 	struct btf_ext_info line_info;
 	struct btf_ext_info core_relo_info;
 	__u32 data_size;
 };
 
+/* ext段中存储的都是这种东西哦 */
 struct btf_ext_info_sec {
 	__u32	sec_name_off;
 	__u32	num_info;

@@ -3270,6 +3270,8 @@ static int bpf_object__init_btf(struct bpf_object *obj,
 {
 	int err = -ENOENT;
 
+	/* 这个函数用来解析当前BPF的elf文件中的BTF信息，包括BTF和EXT信息。 */
+
 	if (btf_data) {
 		obj->btf = btf__new(btf_data->d_buf, btf_data->d_size);
 		err = libbpf_get_error(obj->btf);
@@ -3290,6 +3292,7 @@ static int bpf_object__init_btf(struct bpf_object *obj,
 				 BTF_EXT_ELF_SEC, BTF_ELF_SEC);
 			goto out;
 		}
+		/* 进行ext信息的分配和初始化 */
 		obj->btf_ext = btf_ext__new(btf_ext_data->d_buf, btf_ext_data->d_size);
 		err = libbpf_get_error(obj->btf_ext);
 		if (err) {
@@ -3319,12 +3322,18 @@ static int bpf_object__init_btf(struct bpf_object *obj,
 			}
 
 			sec_num = 0;
+			/* 遍历当前段中所有的sec */
 			for_each_btf_ext_sec(seg, sec) {
 				/* preventively increment index to avoid doing
 				 * this before every continue below
 				 */
 				sec_num++;
 
+				/* 根据偏移从BTF的字符串表中查找对应的段的名字，再
+				 * 根据名字从elf中找到对应的段。然后将段的索引
+				 * 存储到sec_idxs中。这里就建立了每个ext实例与
+				 * section之间的映射关系。
+				 */
 				sec_name = btf__name_by_offset(obj->btf, sec->sec_name_off);
 				if (str_is_empty(sec_name))
 					continue;
@@ -5715,6 +5724,12 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 	n = btf__type_cnt(targ_btf);
 	for (i = targ_start_id; i < n; i++) {
 		t = btf__type_by_id(targ_btf, i);
+
+		/* 遍历所有的类型。跳过类型不兼容的，比如struct和enum就不兼容。然后，
+		 * 按照类型兼容的原则进行匹配，就是忽略最后的___xxx且名称一样的，就是
+		 * 类型匹配的。
+		 */
+
 		if (!btf_kind_core_compat(t, local_t))
 			continue;
 
@@ -5855,6 +5870,14 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 	size_t local_essent_len;
 	int err, i;
 
+	/* 根据类型的ID来进行候选类型的查找。这里返回的是一个链表，说明候选类型可以有
+	 * 多个。
+	 *
+	 * 这里实质上进行的是根据local类型来查找目标类型。所谓的local类型就是BPF的
+	 * elf文件里存储的类型，目标类型就是vmlinux中存储的类型信息。这里要建立两者
+	 * 之间的关系。
+	 */
+
 	local_cand.btf = local_btf;
 	local_cand.id = local_type_id;
 	local_t = btf__type_by_id(local_btf, local_type_id);
@@ -5864,6 +5887,8 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 	local_name = btf__name_by_offset(local_btf, local_t->name_off);
 	if (str_is_empty(local_name))
 		return ERR_PTR(-EINVAL);
+
+	/* 检查兼容性命名规则。 */
 	local_essent_len = bpf_core_essential_name_len(local_name);
 
 	cands = calloc(1, sizeof(*cands));
@@ -5872,6 +5897,7 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 
 	/* Attempt to find target candidates in vmlinux BTF first */
 	main_btf = obj->btf_vmlinux_override ?: obj->btf_vmlinux;
+	/* 从vmlinux中查找所有的匹配的类型 */
 	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf, "vmlinux", 1, cands);
 	if (err)
 		goto err_out;
@@ -6049,6 +6075,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 		}
 	}
 
+	/* 分配一个哈希表？想干啥。。。 */
 	cand_cache = hashmap__new(bpf_core_hash_fn, bpf_core_equal_fn, NULL);
 	if (IS_ERR(cand_cache)) {
 		err = PTR_ERR(cand_cache);
@@ -6061,6 +6088,11 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 		sec_idx = seg->sec_idxs[sec_num];
 		sec_num++;
 
+		/* 遍历core_relo_info中所有的实例，并取出与之对应的到elf的映射
+		 * 索引。这里的elf指的应该就是当前的重定位信息是针对哪个段里面的
+		 * BPF程序。
+		 */
+
 		sec_name = btf__name_by_offset(obj->btf, sec->sec_name_off);
 		if (str_is_empty(sec_name)) {
 			err = -EINVAL;
@@ -6069,6 +6101,11 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 
 		pr_debug("sec '%s': found %d CO-RE relocations\n", sec_name, sec->num_info);
 
+		/* 每个sec实例里面包含了若干的重定位信息，这里在遍历它们。这个数组里面
+		 * 存储的都是 bpf_core_relo 这种东西，这个才是具体的重定位信息。
+		 *
+		 * 这里会根据section的索引和指令的索引来找到对应的BPF程序。
+		 */
 		for_each_btf_ext_rec(seg, sec, i, rec) {
 			if (rec->insn_off % BPF_INSN_SZ)
 				return -EINVAL;
@@ -6102,6 +6139,9 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 				return -EINVAL;
 			insn = &prog->insns[insn_idx];
 
+			/* 往BPF程序的重定位记录表中增加一条记录，并进行数据的
+			 * 初始化。
+			 */
 			err = record_relo_core(prog, rec, insn_idx);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to record relocation: %s\n",
@@ -6119,6 +6159,10 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 				goto out;
 			}
 
+			/* 根据处理（计算）好的重定位信息，进行指令里面的重定位替换。
+			 * 这里的重定位计算，无非就是将imm或者offset替换成真正的
+			 * 数值。
+			 */
 			err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to patch insn #%u: %s\n",
@@ -7376,6 +7420,7 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 	int err;
 
 	if (obj->btf_ext) {
+		/* 存在.BTF.ext信息，才需要进程CO-RE的重定向。 */
 		err = bpf_object__relocate_core(obj, targ_btf_path);
 		if (err) {
 			pr_warn("failed to perform CO-RE relocations: %s\n",
@@ -8922,6 +8967,9 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 	err = err ? : bpf_object__sanitize_maps(obj);
 	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
 	err = err ? : bpf_object_adjust_struct_ops_autoload(obj);
+	/* 进行BPF程序的重定位。这里的重定位包括传统的重定位（map访问等），还进行了
+	 * CO-RE的重定位。
+	 */
 	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : target_btf_path);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
 	err = err ? : bpf_object__create_maps(obj);
@@ -8952,6 +9000,9 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 
 	/* Disallow kernel loading programs of non-native endianness but
 	 * permit cross-endian creation of "light skeleton".
+	 */
+	/* gen_loader是用来生成轻量级eBPF程序（user loader）的，它生成的eBPF骨架
+	 * 不依赖于libelf，且很少依赖libbpf的功能，相当于自带了加载器。
 	 */
 	if (obj->gen_loader) {
 		bpf_gen__init(obj->gen_loader, extra_log_level, obj->nr_programs, obj->nr_maps);

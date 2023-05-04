@@ -270,6 +270,12 @@ int bpf_core_parse_spec(const char *prog_name, const struct btf *btf,
 	__u32 id, name_off;
 	__s64 sz;
 
+	/* 对重定向指令进行解释，将其解释为更加丰富的抽象。这里在进行解释的时候，分为
+	 * 低级解释和高级解释。低级解释单纯的通过字段的索引来进行定位，索引指的是本地
+	 * 的BTF结构体索引，可以通过该索引找到对应字段的名称，再通过名称找到对应的目标
+	 * 结构体中的字段的偏移。
+	 */
+
 	spec_str = btf__name_by_offset(btf, relo->access_str_off);
 	if (str_is_empty(spec_str) || *spec_str == ':')
 		return -EINVAL;
@@ -279,7 +285,7 @@ int bpf_core_parse_spec(const char *prog_name, const struct btf *btf,
 	spec->root_type_id = relo->type_id;
 	spec->relo_kind = relo->kind;
 
-	/* type-based relocations don't have a field access string */
+	/* 如果是基于类型的重定位（比如类型是否存在），那么不需要解释字符串。 */
 	if (core_relo_is_type_based(relo->kind)) {
 		if (strcmp(spec_str, "0"))
 			return -EINVAL;
@@ -301,6 +307,9 @@ int bpf_core_parse_spec(const char *prog_name, const struct btf *btf,
 	if (spec->raw_len == 0)
 		return -EINVAL;
 
+	/* 跳过修饰，找到真正的类型对应的BTF。并将这些信息都存放到 bpf_core_accessor
+	 * 中。
+	 */
 	t = skip_mods_and_typedefs(btf, relo->type_id, &id);
 	if (!t)
 		return -EINVAL;
@@ -568,6 +577,9 @@ static int bpf_core_spec_match(struct bpf_core_spec *local_spec,
 	targ_spec->root_type_id = targ_id;
 	targ_spec->relo_kind = local_spec->relo_kind;
 
+	/* 对于基于类型的重定向，这里只需要判断两个类型是否兼容即可。兼容需要确保其类型
+	 * 保持一致。
+	 */
 	if (core_relo_is_type_based(local_spec->relo_kind)) {
 		if (local_spec->relo_kind == BPF_CORE_TYPE_MATCHES)
 			return bpf_core_types_match(local_spec->btf,
@@ -908,6 +920,11 @@ static int bpf_core_calc_relo(const char *prog_name,
 	res->orig_sz = res->new_sz = 0;
 	res->orig_type_id = res->new_type_id = 0;
 
+	/* 结合本地spec和目标spec进行重定向的处理，最终的结果会放到res结构体中的。
+	 * 以BPF_CORE_FIELD_EXISTS为例，如果目标spec存在，那么会将
+	 * res->validate设置为true。
+	 */
+
 	if (core_relo_is_field_based(relo->kind)) {
 		err = bpf_core_calc_field_relo(prog_name, relo, local_spec,
 					       &res->orig_val, &res->orig_sz,
@@ -921,6 +938,7 @@ static int bpf_core_calc_relo(const char *prog_name,
 		 * Adjustments are performed only if original and new memory
 		 * sizes differ.
 		 */
+		/* 在目标字段和本地字段的尺寸不一样的时候的处理逻辑。 */
 		res->fail_memsz_adjust = false;
 		if (res->orig_sz != res->new_sz) {
 			const struct btf_type *orig_t, *new_t;
@@ -1311,11 +1329,17 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 	int i, j, err;
 
 	local_id = relo->type_id;
+	/* 根据重定位信息的ID获取重定位的类型信息和名称。所以这里指定的并不是
+	 * bpf_core_relo_kind，而是这个type的BTF的id。
+	 */
 	local_type = btf_type_by_id(local_btf, local_id);
 	local_name = btf__name_by_offset(local_btf, local_type->name_off);
 	if (!local_name)
 		return -EINVAL;
 
+	/* 这里应该是进行重定位信息的解释。比如，本地结构体的哪个字段和目标结构体的哪个
+	 * 字段之间的对应关系。
+	 */
 	err = bpf_core_parse_spec(prog_name, local_btf, relo, local_spec);
 	if (err) {
 		const char *spec_str;
@@ -1331,7 +1355,7 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 	bpf_core_format_spec(spec_buf, sizeof(spec_buf), local_spec);
 	pr_debug("prog '%s': relo #%d: %s\n", prog_name, relo_idx, spec_buf);
 
-	/* TYPE_ID_LOCAL relo is special and doesn't need candidate search */
+	/* TYPE_ID_LOCAL的重定位指令不需要目标结构体的参与，因此这里可以直接进行处理 */
 	if (relo->kind == BPF_CORE_TYPE_ID_LOCAL) {
 		/* bpf_insn's imm value could get out of sync during linking */
 		memset(targ_res, 0, sizeof(*targ_res));
@@ -1350,6 +1374,9 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 	}
 
 	for (i = 0, j = 0; i < cands->len; i++) {
+		/* 遍历候选列表中所有的类型，将其与当前的spec进行匹配。如果匹配的话，
+		 * 会将解释后的重定向信息存储到cand_spec中。
+		 */
 		err = bpf_core_spec_match(local_spec, cands->cands[i].btf,
 					  cands->cands[i].id, cand_spec);
 		if (err < 0) {
@@ -1374,6 +1401,8 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 			*targ_res = cand_res;
 			*targ_spec = *cand_spec;
 		} else if (cand_spec->bit_offset != targ_spec->bit_offset) {
+			/* 所有的候选spec要保持一致才行 */
+
 			/* if there are many field relo candidates, they
 			 * should all resolve to the same bit offset
 			 */

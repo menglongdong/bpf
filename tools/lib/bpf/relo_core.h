@@ -26,6 +26,9 @@ struct bpf_core_accessor {
 	const char *name;	/* field name or NULL for array accessor */
 };
 
+/* 经过解释后的重定向指令内容。其中，raw_spec里面存储了一个数组，用于将"0:1:1"格式的
+ * 重定位字符串转为数组[0, 1, 1]。这里指的是结构体中的索引，针对的是本地的BTF。
+ */
 struct bpf_core_spec {
 	const struct btf *btf;
 	/* high-level spec: named fields and array indices only */

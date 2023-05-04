@@ -3390,6 +3390,13 @@ struct btf_ext *btf_ext__new(const __u8 *data, __u32 size)
 	struct btf_ext *btf_ext;
 	int err;
 
+	/* 分配bpf_ext，并将.BTF.ext中的数据拷贝到对应的内存中。这个段中的数据格式：
+	 * 按照btf_ext_header结构存储的头部 + BTF数据。头部中存储了一些元数据
+	 * 信息。
+	 * 
+	 * 头部里存放了函数、代码行以及CO-RE重定位数据在整个段中的偏移和数据长度。
+	 */
+
 	btf_ext = calloc(1, sizeof(struct btf_ext));
 	if (!btf_ext)
 		return libbpf_err_ptr(-ENOMEM);

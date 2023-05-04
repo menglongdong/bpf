@@ -7646,9 +7646,12 @@ enum bpf_core_relo_kind {
  * [0] https://llvm.org/docs/LangRef.html#getelementptr-instruction
  */
 struct bpf_core_relo {
+	/* 需要进行重定向的指令的偏移 */
 	__u32 insn_off;
+	/* 重定向针对的类型（结构体）的ID */
 	__u32 type_id;
 	__u32 access_str_off;
+	/* 重定向的类型 */
 	enum bpf_core_relo_kind kind;
 };
 
