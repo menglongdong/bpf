@@ -1735,6 +1735,12 @@ bool __lock_sock_fast(struct sock *sk) __acquires(&sk->sk_lock.slock);
  *
  *   sk_lock.slock unlocked, owned = 1, BH enabled
  */
+
+/* 
+ * lock_sock()的快速版本。在当前sk已经被加锁了的情况下，走的是慢速路径，其处理逻辑与
+ * lock_sock()相同。在sk未被加锁的情况下，直接获取sk上的自旋锁，而不是获取sk锁。
+ * 快速路径比较快，但是由于拿到的是自旋锁，因此不能持锁太久，且不能阻塞。
+ */
 static inline bool lock_sock_fast(struct sock *sk)
 {
 	/* The sk_lock has mutex_lock() semantics here. */
