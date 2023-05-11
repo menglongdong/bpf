@@ -507,6 +507,7 @@ struct sk_buff *build_skb(void *data, unsigned int frag_size)
 {
 	struct sk_buff *skb = __build_skb(data, frag_size);
 
+	/* 根据已有的数据（内存）来构建一个skb，一般用于网卡驱动收包阶段。 */
 	if (likely(skb && frag_size)) {
 		skb->head_frag = 1;
 		skb_propagate_pfmemalloc(virt_to_head_page(data), skb);

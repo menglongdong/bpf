@@ -1650,6 +1650,10 @@ int inet_gro_complete(struct sk_buff *skb, int nhoff)
 	}
 
 	iph_set_totlen(iph, skb->len - nhoff);
+	/* 进行IP层校验码的重新计算，因为IP报头中的tot_len被修改了。这里是通过
+	 * frag_list链表的形式，组成了一个超大的IP报文？IP报文里的长度被修改
+	 * 成了总数据的长度。
+	 */
 	csum_replace2(&iph->check, totlen, iph->tot_len);
 
 	ops = rcu_dereference(inet_offloads[proto]);

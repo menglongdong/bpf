@@ -94,6 +94,7 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	struct skb_shared_info *pinfo, *skbinfo = skb_shinfo(skb);
 	unsigned int offset = skb_gro_offset(skb);
 	unsigned int headlen = skb_headlen(skb);
+	/* skb中存储的纯数据的长度，应该是不包含mac头部，从IP头部开始算的 */
 	unsigned int len = skb_gro_len(skb);
 	unsigned int delta_truesize;
 	unsigned int new_truesize;
@@ -135,6 +136,12 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 		int i = skbinfo->nr_frags;
 		int nr_frags = pinfo->nr_frags + i;
 
+		/* 如果线性区的长度小于offset，那么说明skb的有效数据都存储在frags
+		 * 区域，这里只需要进行frag的合并即可。这里首先检查上一个skb中的
+		 * frags的数量有没有超限，没有的话就取出下一个可用的frag的地址。
+		 */
+
+		/* nr_frags是合并后的frags的数量 */
 		if (nr_frags > MAX_SKB_FRAGS)
 			goto merge;
 
@@ -145,9 +152,11 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 		frag = pinfo->frags + nr_frags;
 		frag2 = skbinfo->frags + i;
 		do {
+			/* 将skb的frag地址依次拷贝到p的frags数组的可用区域中 */
 			*--frag = *--frag2;
 		} while (--i);
 
+		/* 跳过无效的数据，即跳过data_offset之前的数据 */
 		skb_frag_off_add(frag, offset);
 		skb_frag_size_sub(frag, offset);
 
@@ -155,10 +164,12 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 		new_truesize = SKB_TRUESIZE(skb_end_offset(skb));
 		delta_truesize = skb->truesize - new_truesize;
 
+		/* 设置frags被挪走之后的skb的各种尺寸信息 */
 		skb->truesize = new_truesize;
 		skb->len -= skb->data_len;
 		skb->data_len = 0;
 
+		/* 这个skb被合并了，已经可以被释放了 */
 		NAPI_GRO_CB(skb)->free = NAPI_GRO_FREE;
 		goto done;
 	} else if (skb->head_frag) {
@@ -167,6 +178,10 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 		struct page *page = virt_to_head_page(skb->head);
 		unsigned int first_size = headlen - offset;
 		unsigned int first_offset;
+
+		/* 有效数据没有（全部）存储到frags里，但是线性区存储到了page fragment的
+		 * 情况。这里可以把线性区当做一个frag来对待，逻辑与上面类似。
+		 */
 
 		if (nr_frags + 1 + skbinfo->nr_frags > MAX_SKB_FRAGS)
 			goto merge;
@@ -190,7 +205,10 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	}
 
 merge:
-	/* sk ownership - if any - completely transferred to the aggregated packet */
+	/* 无法将当前skb的数据合并到最后一个skb里，那么就将这个skb加入到当前的skb链表
+	 * 中，也就是frag_list中。
+	 */
+	/* sk owenrship - if any - completely transferred to the aggregated packet */
 	skb->destructor = NULL;
 	skb->sk = NULL;
 	delta_truesize = skb->truesize;
@@ -216,10 +234,12 @@ merge:
 
 done:
 	NAPI_GRO_CB(p)->count += segs;
+	/* 更新领头skb的一些长度信息。领头skb里的长度包含了链表skb中所有的数据长度。 */
 	p->data_len += len;
 	p->truesize += delta_truesize;
 	p->len += len;
 	if (lp != p) {
+		/* 进行了数据合并的情况，这里会更新最后一个skb里面的一些长度信息。 */
 		lp->data_len += len;
 		lp->truesize += delta_truesize;
 		lp->len += len;

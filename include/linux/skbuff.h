@@ -969,6 +969,7 @@ struct sk_buff {
 				nohdr:1,
 				fclone:2,
 				peeked:1,
+	/* head_frag指的是skb的data（线性区）是通过物理页的方式分配而来。 */
 				head_frag:1,
 				pfmemalloc:1,
 				pp_recycle:1; /* page_pool recycle indicator */

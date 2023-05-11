@@ -267,6 +267,10 @@ struct sk_buff *tcp_gro_lookup(struct list_head *head, struct tcphdr *th)
 	struct tcphdr *th2;
 	struct sk_buff *p;
 
+	/* 从p链表中找到当前流的skb。属于同一个流的所有skb都会形成一个frag_list链表，
+	 * 因此一个流的所有skb都会在同一个skb的frag_list中。这里需要找到那个skb，
+	 * 且这个skb应该是唯一的。
+	 */
 	list_for_each_entry(p, head, list) {
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
@@ -340,24 +344,41 @@ struct sk_buff *tcp_gro_receive(struct list_head *head, struct sk_buff *skb,
 		goto out_check_final;
 	}
 
+	/* flush代表不进行GRO，直接对报文进行收包（之前需要对GRO链表进行flush）。
+	 * 如果不需要flush，才会调用skb_gro_receive进行GRO并包。
+	 */
 	if (flush || skb_gro_receive(p, skb)) {
+		/* 不需要并包，或者并包失败的情况 */
 		mss = 1;
 		goto out_check_final;
 	}
 
+	/* 虽然进行了并包，但是th2所指向的内存依然没有变。并包了的情况下，如果当前skb
+	 * 里面有fin或者psh标准，需要将其同步到领头skb的TCP数据中。
+	 */
 	tcp_flag_word(th2) |= flags & (TCP_FLAG_FIN | TCP_FLAG_PSH);
 
 out_check_final:
+	/* 最后的操作，是否GRO并包了都会走到这里。如果当前skb的有效数据<mss，那么
+	 * 需要进行flush，因为后面大概率没有数据了。这里说明，GRO一般只会在进行
+	 * 大的数据传输中才会使用。上面的flush判断的是要不要并包，这里的flush
+	 * 判断的是要不要
+	 */
+
 	/* Force a flush if last segment is smaller than mss. */
 	if (unlikely(skb_is_gso(skb)))
 		flush = len != NAPI_GRO_CB(skb)->count * skb_shinfo(skb)->gso_size;
 	else
 		flush = len < mss;
 
+	/* 如果报文存在以下标准，那边不再进行GRO等待，直接flush */
 	flush |= (__force int)(flags & (TCP_FLAG_URG | TCP_FLAG_PSH |
 					TCP_FLAG_RST | TCP_FLAG_SYN |
 					TCP_FLAG_FIN));
 
+	/* 找到了同一个流的skb（p），但是没有并包，或者需要进行flush，那么就把找到的
+	 * 这个skb返回。内核会调用napi_gro_complete来对这个返回的skb进行处理。
+	 */
 	if (p && (!NAPI_GRO_CB(skb)->same_flow || flush))
 		pp = p;
 
@@ -454,13 +475,18 @@ INDIRECT_CALLABLE_SCOPE int tcp4_gro_complete(struct sk_buff *skb, int thoff)
 		return 0;
 	}
 
+	/* 计算TCP伪校验码，因为这里把整个frag_list里的数据当做一个处理，因此需要
+	 * 校对校验码。这里直接取伪首部的校验码作为TCP的校验码？
+	 */
 	th->check = ~tcp_v4_check(skb->len - thoff, iph->saddr,
 				  iph->daddr, 0);
 
+	/* GRO在收包阶段相当于进行GSO反向聚合，最后仍要映射回GSO语义。 */
 	BUILD_BUG_ON(SKB_GSO_TCP_FIXEDID << 1 != SKB_GSO_TCP_FIXEDID_INNER);
 	skb_shinfo(skb)->gso_type |= SKB_GSO_TCPV4 |
 			(NAPI_GRO_CB(skb)->ip_fixedid * SKB_GSO_TCP_FIXEDID);
 
+	/* 映射GRO的信息成GSO到skb中 */
 	tcp_gro_complete(skb);
 	return 0;
 }
