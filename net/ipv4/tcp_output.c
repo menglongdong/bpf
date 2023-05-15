@@ -1567,6 +1567,9 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		 * packets and thus the corresponding ACK packet that would
 		 * release the following packet.
 		 */
+		/* 对于GSO的情况，这里给它加个PSH的标志。这会使得接收端在启用了GRO的
+		 * 情况下，刷新当前流的数据到协议栈，从而一定程度上提高性能。
+		 */
 		if (tcp_skb_pcount(skb) > 1)
 			tcb->tcp_flags |= TCPHDR_PSH;
 	}
@@ -3386,7 +3389,9 @@ u32 __tcp_select_window(struct sock *sk)
 	 * fluctuations.  --SAW  1998/11/1
 	 */
 	int mss = icsk->icsk_ack.rcv_mss;
+	/* 当前套接口sk_rcvbuf剩余空间可以容纳的数据量 */
 	int free_space = tcp_space(sk);
+	/* 当前套接口sk_rcvbuf可以容纳的数据量 */
 	int allowed_space = tcp_full_space(sk);
 	int full_space, window;
 
@@ -3409,9 +3414,11 @@ u32 __tcp_select_window(struct sock *sk)
 
 	/* do not allow window to shrink */
 
+	/* 内存使用量已经超过了一半的情况 */
 	if (free_space < (full_space >> 1)) {
 		icsk->icsk_ack.quick = 0;
 
+		/* 处于内存压力的情况下，会强制性地将wnd设置为4个mss？ */
 		if (tcp_under_memory_pressure(sk))
 			tcp_adjust_rcv_ssthresh(sk);
 
@@ -3426,6 +3433,10 @@ u32 __tcp_select_window(struct sock *sk)
 		 * new incoming data is dropped due to memory limits.
 		 * With large window, mss test triggers way too late in order
 		 * to announce zero window in time before rmem limit kicks in.
+		 */
+
+		/* 是在这里限制的？它确保了达到的报文不会超过full_space，即”多接收一个
+		 * skb“的情况，也就是我们在tcp_try_rmem_schedule中描述的。
 		 */
 		if (free_space < (allowed_space >> 4) || free_space < mss)
 			return 0;

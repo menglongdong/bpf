@@ -1705,6 +1705,9 @@ static inline int __tcp_win_from_space(u8 scaling_ratio, int space)
 	return scaled_space >> TCP_RMEM_TO_WIN_SCALE;
 }
 
+/* 根据space来计算对应的数据大小，就是将tcp_adv_win_scale考虑进去了。默认情况下，
+ * 该函数返回space的一半，也就是说他认为有一半空间用于存储skb结构体相关的信息了。
+ */
 static inline int tcp_win_from_space(const struct sock *sk, int space)
 {
 	return __tcp_win_from_space(tcp_sk(sk)->scaling_ratio, space);
@@ -1737,6 +1740,7 @@ static inline void tcp_scaling_ratio_init(struct sock *sk)
 /* Note: caller must be prepared to deal with negative returns */
 static inline int tcp_space(const struct sock *sk)
 {
+	/* 当前套接口剩余的可用内存空间，即rcv_buf减去所有已分配的内存 */
 	return tcp_win_from_space(sk, READ_ONCE(sk->sk_rcvbuf) -
 				  READ_ONCE(sk->sk_backlog.len) -
 				  atomic_read(&sk->sk_rmem_alloc));
@@ -1744,6 +1748,7 @@ static inline int tcp_space(const struct sock *sk)
 
 static inline int tcp_full_space(const struct sock *sk)
 {
+	/* 当前套接口所有的收包buf大小（考虑了tcp_adv_win_scale） */
 	return tcp_win_from_space(sk, READ_ONCE(sk->sk_rcvbuf));
 }
 
@@ -1775,6 +1780,10 @@ void __tcp_cleanup_rbuf(struct sock *sk, int copied);
 static inline bool tcp_rmem_pressure(const struct sock *sk)
 {
 	int rcvbuf, threshold;
+
+	/* 检查套接口是否处于内存压力状态。总体内存处于压力状态、当前rcv_buf使用量
+	 * 达到了7/8以上都认为处于压力状态。
+	 */
 
 	if (tcp_under_memory_pressure(sk))
 		return true;

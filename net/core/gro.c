@@ -264,6 +264,9 @@ static void gro_complete(struct gro_node *gro, struct sk_buff *skb)
 
 	BUILD_BUG_ON(sizeof(struct napi_gro_cb) > sizeof(skb->cb));
 
+	/* GRO链表中只有一个skb，那么不需要进行GRO处理，直接调用gro_normal_one
+	 * 将skb传递上去。
+	 */
 	if (NAPI_GRO_CB(skb)->count == 1) {
 		skb_shinfo(skb)->gso_size = 0;
 		goto out;
@@ -290,6 +293,9 @@ static void gro_complete(struct gro_node *gro, struct sk_buff *skb)
 	}
 
 out:
+	/* 这里不一定会进行skb的发送，gro_normal_one只有在攒够了skb的情况下才会
+	 * 进行skb的处理。
+	 */
 	gro_normal_one(gro, skb, NAPI_GRO_CB(skb)->count);
 }
 
@@ -546,20 +552,35 @@ found_ptype:
 	}
 
 	same_flow = NAPI_GRO_CB(skb)->same_flow;
+	/* 检查当前skb是否需要被释放。GRO_MERGED_FREE代表当前skb的数据被合并到了
+	 * 上一个skb，当前skb可以释放。GRO_MERGED代表当前skb被加入到了frag_list
+	 * 链表，不能释放。
+	 */
 	ret = NAPI_GRO_CB(skb)->free ? GRO_MERGED_FREE : GRO_MERGED;
 
+	/* 在找到了属于同一个流的skb链表，且需要flush数据的情况下（没有并包，或者
+	 * 并包了但是需要flush），这个pp指向的是那个skb链表。
+	 */
 	if (pp) {
+		/* 将这个skb从GRO的哈希链表中删除 */
 		skb_list_del_init(pp);
+		/* 做一些收尾的工作，这里会将GRO映射为GSO。随后，调用
+		 * gro_normal_one将报文转移到napi->rx_list中。
+		 */
 		gro_complete(gro, pp);
 		gro_list->count--;
 	}
 
+	/* 如果并包了，那么当前skb的same_flow会被置为1 */
 	if (same_flow)
 		goto ok;
 
 	if (NAPI_GRO_CB(skb)->flush)
 		goto normal;
 
+	/* 走到这里，应该是没有找到同一个流的skb，这种情况下当前skb将要作为领头skb
+	 * 被加入到哈希表中了。
+	 */
 	if (unlikely(gro_list->count >= MAX_GRO_SKBS))
 		gro_flush_oldest(gro, &gro_list->list);
 	else
@@ -574,6 +595,7 @@ found_ptype:
 	list_add(&skb->list, &gro_list->list);
 	ret = GRO_HELD;
 ok:
+	/* 在不需要flush的情况下，当前skb是不会被加入到rx_list链表中的。 */
 	if (gro_list->count) {
 		if (!test_bit(bucket, &gro->bitmask))
 			__set_bit(bucket, &gro->bitmask);
@@ -622,10 +644,12 @@ static gro_result_t gro_skb_finish(struct gro_node *gro, struct sk_buff *skb,
 {
 	switch (ret) {
 	case GRO_NORMAL:
+		/* 走常规路线，没有进行GRO */
 		gro_normal_one(gro, skb, 1);
 		break;
 
 	case GRO_MERGED_FREE:
+		/* 这个skb中的数据被合并到了其他的skb中，可以直接释放了 */
 		if (NAPI_GRO_CB(skb)->free == NAPI_GRO_FREE_STOLEN_HEAD)
 			napi_skb_free_stolen_head(skb);
 		else if (skb->fclone != SKB_FCLONE_UNAVAILABLE)

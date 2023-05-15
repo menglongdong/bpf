@@ -355,7 +355,13 @@ struct gro_list {
  */
 struct gro_node {
 	unsigned long		bitmask;
+	/* 用于保存属于不同的流的skb的哈希表。这是一个链表式哈希表，每个数组中存储的
+	 * 都是一个链表，以链表的形式将skb保存起来。对于TCP协议，这个哈希表中的
+	 * 一个skb就代表着一个TCP流，属于同一个流的skb会通过 frag_list 的形式
+	 * 并入到这个skb中。
+	 */
 	struct gro_list		hash[GRO_HASH_BUCKETS];
+	/* 已经经过GRO组装好的准备上送到内核协议栈的skb链表 */
 	struct list_head	rx_list;
 	u32			rx_count;
 	u32			cached_napi_id;

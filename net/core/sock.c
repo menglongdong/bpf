@@ -3294,6 +3294,7 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 	struct proto *prot = sk->sk_prot;
 	long allocated = 0;
 
+	/* 检查当前协议总内存是否允许进行分配。 */
 	if (!sk->sk_bypass_prot_mem) {
 		sk_memory_allocated_add(sk, amt);
 		allocated = sk_memory_allocated(sk);
@@ -3306,16 +3307,19 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 			goto suppress_allocation;
 	}
 
+	/* 未使用协议内存统计时，直接允许分配。 */
 	if (!allocated)
 		return 1;
 
-	/* Under limit. */
+	/* 已用内存小于tcp_mem[0]的时候会退出内存压力状态。 */
 	if (allocated <= sk_prot_mem_limits(sk, 0)) {
 		sk_leave_memory_pressure(sk);
 		return 1;
 	}
 
-	/* Under pressure. */
+	/* 已用内存大于tcp_mem[1]的时候会进入到内存压力状态。通过这种方式，避免频繁的
+	 * 进、出内存压力状态。
+	 */
 	if (allocated > sk_prot_mem_limits(sk, 1))
 		sk_enter_memory_pressure(sk);
 
@@ -3332,6 +3336,7 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 	 * lots of sockets whose usage are under minimum buffer size.
 	 */
 	if (kind == SK_MEM_RECV) {
+		/* 内存压力状态下，强制性地允许套接口使用至少tcp_rmem[0]的内存 */
 		if (atomic_read(&sk->sk_rmem_alloc) < sk_get_rmem0(sk, prot))
 			return 1;
 
@@ -3353,6 +3358,9 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 		 * scope of global accounting, so it only makes
 		 * sense for global memory pressure.
 		 */
+		/* 当前协议有内存压力控制单元，且当前不处于内存压力状态，那么允许进行
+		 * 内存的分配。
+		 */
 		if (!sk_under_global_memory_pressure(sk))
 			return 1;
 
@@ -3361,6 +3369,10 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 		 * usage to raise.
 		 */
 		alloc = sk_sockets_allocated_read_positive(sk);
+		/* 当前套接口的总内存小于 (tcp_mem[2]/sk_counts)，那么允许进行
+		 * 内存的分配。这里可以看出来，即使处于内存压力状态，也是有机会
+		 * 进行内存的分配的，只不过这里会平均分配tcp_mem[2]。
+		 */
 		if (sk_prot_mem_limits(sk, 2) > alloc *
 		    sk_mem_pages(sk->sk_wmem_queued +
 				 atomic_read(&sk->sk_rmem_alloc) +

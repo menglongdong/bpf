@@ -713,6 +713,8 @@ static void tcp_grow_window(struct sock *sk, const struct sk_buff *skb,
 		unsigned int truesize = truesize_adjust(adjust, skb);
 		int incr;
 
+		/* 计算出来一个窗口增长的数值（根据当前skb大小） */
+
 		/* Check #2. Increase window, if skb with such overhead
 		 * will fit to rcvbuf in future.
 		 */
@@ -785,6 +787,12 @@ static void tcp_clamp_window(struct sock *sk)
 	icsk->icsk_ack.quick = 0;
 	rmem2 = READ_ONCE(net->ipv4.sysctl_tcp_rmem[2]);
 
+	/* 这应该是唯一的内核会修改rcv_buf的地方了？如果当前已经分配出去的内存比缓冲区
+	 * 上限要大，且当前总内存占用量没有超过tcp_mem[0]，且当前没有处于内存压力状态，
+	 * 那么进行rcv_buf的自适应，即将其设置为已经分配的大小。
+	 * 
+	 * 貌似这里一旦设置了，就不会再收回了？
+	 */
 	if (sk->sk_rcvbuf < rmem2 &&
 	    !(sk->sk_userlocks & SOCK_RCVBUF_LOCK) &&
 	    !tcp_under_memory_pressure(sk) &&
@@ -792,6 +800,9 @@ static void tcp_clamp_window(struct sock *sk)
 		WRITE_ONCE(sk->sk_rcvbuf,
 			   min(atomic_read(&sk->sk_rmem_alloc), rmem2));
 	}
+	/* 这里是clamp失败的情况，内存不允许的话，就将tp->rcv_ssthresh设置为2？
+	 * 还不是很理解这里的逻辑，姑且再看看。
+	 */
 	if (atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf)
 		tp->rcv_ssthresh = min(tp->window_clamp, 2U * tp->advmss);
 }
@@ -1055,6 +1066,7 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 	tcp_data_ecn_check(sk, skb);
 
+	/* 每次收到新的报文（携带的数据长度超过128？），都会尝试进行窗口增长。 */
 	if (skb->len >= 128)
 		tcp_grow_window(sk, skb, true);
 }
@@ -5435,6 +5447,9 @@ static void tcp_sack_new_ofo_skb(struct sock *sk, u32 seq, u32 end_seq)
 		goto new_sack;
 
 	for (this_sack = 0; this_sack < cur_sacks; this_sack++, sp++) {
+		/* 如果乱序的数据刚好和某个sack块连着，那么就将其加入到那个块，
+		 * 并将其移动到第一个块。
+		 */
 		if (tcp_sack_extend(sp, seq, end_seq)) {
 			if (this_sack >= TCP_SACK_BLOCKS_EXPECTED)
 				tcp_sack_compress_send_ack(sk);
@@ -5455,6 +5470,10 @@ static void tcp_sack_new_ofo_skb(struct sock *sk, u32 seq, u32 end_seq)
 	 * always know there is at least one SACK present already here.
 	 *
 	 * If the sack array is full, forget about the last one.
+	 */
+
+	/* 找不到一个可以插入的sack块，那么就将这个报文作为第一个块，其他的依次往后
+	 * 挪。
 	 */
 	if (this_sack >= TCP_NUM_SACKS) {
 		this_sack--;
@@ -5641,11 +5660,29 @@ static bool tcp_can_ingest(const struct sock *sk, const struct sk_buff *skb)
 static int tcp_try_rmem_schedule(struct sock *sk, const struct sk_buff *skb,
 				 unsigned int size)
 {
+	/* 检查收包队列内存并尝试进行内存调度。 */
 	if (!tcp_can_ingest(sk, skb) ||
 	    !sk_rmem_schedule(sk, skb, size)) {
 
+		/* 如果当前套接口内存调度失败，那么尝试从当前套接口上回收一些内存，通过
+		 * 尝试回收队列中的skb的方式。
+		 *
+		 * 注意：这个函数里面会进行rcv_buf的自适应，即如果当前内存充足，会
+		 * 将rcv_buf设置为已经使用的内存量。这个一般是在
+		 *  atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf
+		 * 这个条件的时候走这个路径。
+		 */
 		if (tcp_prune_queue(sk, skb) < 0)
 			return -1;
+
+		/* 常规的内存增长的路径：
+		 *  sk_rmem_alloc超过了sk_rcvbuf →
+		 *  tcp_clamp_window设置sk_rcvbuf为sk_rmem_alloc →
+		 *  sk_rmem_schedule
+		 * 
+		 * 一旦增加了sk_rcvbuf，后面在使用sk_rcvbuf范围内的内存时就不需要
+		 * 进行内存调度了。
+		 */
 
 		while (!sk_rmem_schedule(sk, skb, size)) {
 			if (!tcp_prune_ofo_queue(sk, skb))
@@ -5812,6 +5849,9 @@ static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb,
 	int eaten;
 	struct sk_buff *tail = skb_peek_tail(&sk->sk_receive_queue);
 
+	/* 尝试进行skb的合并。一些情况下是没法合并的，比如skb曾经克隆过，这个时候
+	 * skb里的data是共享的，不能合并。
+	 */
 	eaten = (tail &&
 		 tcp_try_coalesce(sk, tail,
 				  skb, fragstolen)) ? 1 : 0;
@@ -5942,11 +5982,17 @@ queue_and_out:
 			inet_csk_schedule_ack(sk);
 			READ_ONCE(sk->sk_data_ready)(sk);
 
+			/* 调度内存失败，此时sk_rmem_alloc > sk_rcvbuf，且
+			 * 无法进行内存的增长。
+			 */
 			if (skb_queue_len(&sk->sk_receive_queue) && skb->len) {
 				reason = SKB_DROP_REASON_PROTO_MEM;
 				NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVQDROP);
 				goto drop;
 			}
+			/* 收包队列里面没有数据，那么这个时候可以强制调度内存（至少可以处理
+			 * 一个报文）。
+			 */
 			sk_forced_mem_schedule(sk, skb->truesize);
 		}
 
@@ -6071,17 +6117,16 @@ restart:
 
 		/* No new bits? It is possible on ofo queue. */
 		if (!before(start, TCP_SKB_CB(skb)->end_seq)) {
+			/* 释放当前skb，并返回下一个skb。如果当前的skb的序列号
+			 * 不在要合并的范围内，那么就释放它，并跳到下一个skb。
+			 */
 			skb = tcp_collapse_one(sk, skb, list, root);
 			if (!skb)
 				break;
 			goto restart;
 		}
 
-		/* The first skb to collapse is:
-		 * - not SYN/FIN and
-		 * - bloated or contains data before "start" or
-		 *   overlaps to the next one and mptcp allow collapsing.
-		 */
+		/* 找到第一个可以进行合并的skb，并结束当前的loop */
 		if (!(TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) &&
 		    (tcp_win_from_space(sk, skb->truesize) > skb->len ||
 		     before(TCP_SKB_CB(skb)->seq, start))) {
@@ -6089,6 +6134,7 @@ restart:
 			break;
 		}
 
+		/* MPTCP的场景 */
 		if (n && n != tail && skb_frags_readable(n) &&
 		    tcp_skb_can_collapse_rx(skb, n) &&
 		    TCP_SKB_CB(skb)->end_seq != TCP_SKB_CB(n)->seq) {
@@ -6124,6 +6170,11 @@ skip_this:
 			__skb_queue_tail(&tmp, nskb); /* defer rbtree insertion */
 		skb_set_owner_r(nskb, sk);
 		mptcp_skb_ext_move(nskb, skb);
+
+		/* 分配一个新的skb，并将原来的数据拷贝到这个skb上，释放原来的skb。
+		 * 同时，将新的skb插入到队列中。注意：这里会将当前skb以及后续的skb
+		 * 里的数据拷贝到新的skb上，知道范围（长度）满足结束条件。
+		 */
 
 		/* Copy data, releasing collapsed skbs. */
 		while (copy > 0) {
