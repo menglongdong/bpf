@@ -3576,6 +3576,14 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	u64 key = 0;
 	int err;
 
+	/* TRACING类型的BPF程序创建linker的函数，用于将BPF程序attach到目标函数。
+	 * 这里的tgt_prog_fd、btf_id和bpf_cookie都是用户态传递下来的，用于设置
+	 * 当前BPF程序的目标。
+	 * 
+	 * 这里可以不指定，因为在进行load的时候，对于普通的TRACING程序（如FENTRY、
+	 * FEXIT），已经指定了btf_id，确定了目标。
+	 */
+
 	switch (prog->type) {
 	case BPF_PROG_TYPE_TRACING:
 		if (prog->expected_attach_type != BPF_TRACE_FENTRY &&
@@ -3630,6 +3638,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		key = bpf_trampoline_compute_key(tgt_prog, NULL, btf_id);
 	}
 
+	/* 分配一个link实例，并对其进行初始化。FSESSION场景会使用专门的link类型。 */
 	if (prog->expected_attach_type == BPF_TRACE_FSESSION) {
 		struct bpf_fsession_link *fslink;
 
@@ -3678,6 +3687,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	 *   are NULL, then program was already attached and user did not provide
 	 *   tgt_prog_fd so we have no way to find out or create trampoline
 	 */
+	/* tgt_prog在类型为BPF_PROG_TYPE_EXT的时候才会有值。而
+	 * prog->aux->dst_trampoline一般会在check_attach_btf_id中被赋值。
+	 */
 	if (!prog->aux->dst_trampoline && !tgt_prog) {
 		/*
 		 * Allow re-attach for TRACING and LSM programs. If it's
@@ -3701,6 +3713,10 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 
 	if (!prog->aux->dst_trampoline ||
 	    (key && key != prog->aux->dst_trampoline->key)) {
+		/* 目标函数改变了，attach的时候指定的目标函数和load的时候指定的
+		 * 不一样。这里会根据当前的btf_id重新获取对应的目标的tr。
+		 */
+
 		/* If there is no saved target, or the specified target is
 		 * different from the destination specified at load time, we
 		 * need a new trampoline and a check for compatibility
@@ -3734,10 +3750,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		tgt_prog = prog->aux->dst_prog;
 	}
 
+	/* 为linker分配fd */
 	err = bpf_link_prime(&link->link.link, &link_primer);
 	if (err)
 		goto out_unlock;
 
+	/* 将BPF程序attach到目标tr上。 */
 	err = bpf_trampoline_link_prog(&link->link, tr, tgt_prog);
 	if (err) {
 		bpf_link_cleanup(&link_primer);

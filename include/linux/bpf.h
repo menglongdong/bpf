@@ -1677,6 +1677,9 @@ struct bpf_prog_aux {
 	void __percpu *priv_stack_ptr;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
 	struct bpf_prog *dst_prog;
+	/* 当前BPF程序要attach到的BPF、内核函数等对应的bpf_trampoline，可能多个
+	 * BPF程序使用一个实例。
+	 */
 	struct bpf_trampoline *dst_trampoline;
 	enum bpf_prog_type saved_dst_prog_type;
 	enum bpf_attach_type saved_dst_attach_type;

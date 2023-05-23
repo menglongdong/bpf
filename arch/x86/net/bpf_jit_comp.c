@@ -3260,6 +3260,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (nr_regs > MAX_BPF_FUNC_ARGS)
 		return -ENOTSUPP;
 
+	/* trampoline的栈布局。这里的trampoline应该是指的BPF程序的入口函数，即
+	 * 对于ftrace，用来取代nop的函数。
+	 */
 	/* Generated trampoline stack layout:
 	 *
 	 * RBP + 8         [ return address  ]
