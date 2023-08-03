@@ -2120,14 +2120,16 @@ out:
 
 #define __SEQ_0_11	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 
+/* @1
+ * 创建一个长度为x的数组，并将所有的参数拷贝到数组中，然后将数组指针
+ * 作为context传递给eBPF程序。
+ */
+
 /* bpf_trace_runx的定义过程 */
 #define BPF_TRACE_DEFN_x(x)						\
 	void bpf_trace_run##x(struct bpf_raw_tp_link *link,		\
 			      REPEAT(x, SARG, __DL_COM, __SEQ_0_11))	\
-	{								\
-		/* 创建一个长度为x的数组，并将所有的参数拷贝到数组中，然后将数组指针	\
-		 * 作为context传递给eBPF程序。					\
-		 */
+	{	/* $1 */						\
 		u64 args[x];						\
 		REPEAT(x, COPY, __DL_SEM, __SEQ_0_11);			\
 		__bpf_trace_run(link, args);				\
