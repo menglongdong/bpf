@@ -783,6 +783,9 @@ enum {
 #define ftrace_rec_count(rec)	((rec)->flags & FTRACE_REF_MAX)
 
 struct dyn_ftrace {
+	/* mcount指令的地址。该指令一般不在函数的起始位置（不像__fentry__），而是在
+	 * 栈帧初始化指令之后。
+	 */
 	unsigned long		ip; /* address of mcount call-site */
 	unsigned long		flags;
 	struct dyn_arch_ftrace	arch;

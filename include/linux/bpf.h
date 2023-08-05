@@ -1344,6 +1344,7 @@ struct bpf_trampoline {
 	struct {
 		struct btf_func_model model;
 		void *addr;
+		/* 代表当前的record是否被ftrace托管了（一般都会） */
 		bool ftrace_managed;
 	} func;
 	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF

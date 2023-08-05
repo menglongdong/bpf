@@ -576,6 +576,9 @@ static int emit_call(u8 **pprog, void *func, void *ip)
 	return emit_patch(pprog, func, ip, 0xE8);
 }
 
+/* 这里的ip一般指的是prog中最后一条指令，用于确定进行call的函数的偏移量。这里的call
+ * 后面跟的地址是偏移地址。
+ */
 static int emit_rsb_call(u8 **pprog, void *func, void *ip)
 {
 	OPTIMIZER_HIDE_VAR(func);
@@ -604,9 +607,11 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		ret = old_t == BPF_MOD_CALL ?
 		      emit_call(&prog, old_addr, ip) :
 		      emit_jump(&prog, old_addr, ip);
-		if (ret)
-			return ret;
+	} else {
+		ret = emit_call(&prog, __fentry__, ip);
 	}
+	if (ret)
+		return ret;
 
 	memcpy(new_insn, nop_insn, X86_PATCH_SIZE);
 	if (new_t != BPF_MOD_NOP && new_addr) {
@@ -614,9 +619,11 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		ret = new_t == BPF_MOD_CALL ?
 		      emit_call(&prog, new_addr, ip) :
 		      emit_jump(&prog, new_addr, ip);
-		if (ret)
-			return ret;
+	} else {
+		ret = emit_call(&prog, __fentry__, ip);
 	}
+	if (ret)
+		return ret;
 
 	ret = -EBUSY;
 	mutex_lock(&text_mutex);
@@ -3248,14 +3255,17 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	WARN_ON_ONCE((flags & BPF_TRAMP_F_INDIRECT) &&
 		     (flags & ~(BPF_TRAMP_F_INDIRECT | BPF_TRAMP_F_RET_FENTRY_RET)));
 
-	/* extra registers for struct arguments */
+	/* nr_regs是用于存储函数参数所用到的寄存器的个数。对于函数参数没有结构体的情况，
+	 * 其个数与参数个数相同；否则，要考虑结构体的大小。下面的代码就是考虑在存在结构体
+	 * 的情况下，需要的寄存器的个数。
+	 */
 	for (i = 0; i < m->nr_args; i++) {
 		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
 			nr_regs += (m->arg_size[i] + 7) / 8 - 1;
 	}
 
-	/* x86-64 supports up to MAX_BPF_FUNC_ARGS arguments. 1-6
-	 * are passed through regs, the remains are through stack.
+	/* x86_64目前最多可以支持跟踪12个参数的内核函数。在参数个数超过6个时，多余的
+	 * 参数需要通过栈传参的方式来进行传递。
 	 */
 	if (nr_regs > MAX_BPF_FUNC_ARGS)
 		return -ENOTSUPP;
@@ -3263,6 +3273,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	/* trampoline的栈布局。这里的trampoline应该是指的BPF程序的入口函数，即
 	 * 对于ftrace，用来取代nop的函数。
 	 */
+
 	/* Generated trampoline stack layout:
 	 *
 	 * RBP + 8         [ return address  ]
@@ -3290,42 +3301,56 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 * RSP                 [ tail_call_cnt_ptr ] BPF_TRAMP_F_TAIL_CALL_CTX
 	 */
 
-	/* room for return value of orig_call or fentry prog */
+	/* 用于存储函数返回值的栈空间，在需要在TRAMPOLINE中调用函数体（FEXIT的情况）
+	 * 的时候需要这部分的空间。
+	 */
 	save_ret = flags & (BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_RET_FENTRY_RET);
 	if (save_ret)
 		stack_size += 8;
 
+	/* 预留的存储函数参数的栈空间。每个寄存器大小为8字节，因此nr_regs*8就是需要
+	 * 的空间大小。
+	 */
 	stack_size += nr_regs * 8;
 	regs_off = stack_size;
 
-	/* function matedata, such as regs count  */
+	/* 存储参数个数到栈空间，用于使用helper函数bpf_get_func_arg_cnt()来获取
+	 * 目标函数的参数个数。
+	 */
 	stack_size += 8;
 	func_meta_off = stack_size;
 
+	/* 用于存储目标函数的地址到栈空间，用于使用helper函数bpf_get_func_ip()来
+	 * 获取目标函数的地址。
+	 */
 	if (flags & BPF_TRAMP_F_IP_ARG)
 		stack_size += 8; /* room for IP address argument */
 
 	ip_off = stack_size;
 
+	/* 为session cookie预留栈空间。 */
 	cookie_cnt = bpf_fsession_cookie_cnt(tlinks);
-	/* room for session cookies */
 	stack_size += cookie_cnt * 8;
 	cookie_off = stack_size;
-
+	/* 用来临时保存rbx寄存器的值 */
 	stack_size += 8;
 	rbx_off = stack_size;
 
+	/* 用于存储bpf_tramp_run_ctx结构体。这个结构体会在一些函数中作为上下文被
+	 * 使用到。
+	 */
 	stack_size += (sizeof(struct bpf_tramp_run_ctx) + 7) & ~0x7;
 	run_ctx_off = stack_size;
 
 	if (nr_regs > 6 && (flags & BPF_TRAMP_F_CALL_ORIG)) {
-		/* the space that used to pass arguments on-stack */
+		/* 存在栈传参的情况，且我们需要在当前TRAMPOLINE中调用函数体，那么
+		 * 我们需要将栈中的参数由上一级栈帧拷贝到当前TRAMPOLINE的栈中。
+		 * 这里是为栈传参所保留的栈空间，其中get_nr_used_regs()获取的是
+		 * 通过寄存器传参的参数个数。
+		 */
 		stack_size += (nr_regs - get_nr_used_regs(m)) * 8;
-		/* make sure the stack pointer is 16-byte aligned if we
-		 * need pass arguments on stack, which means
-		 *  [stack_size + 8(rbp) + 8(rip) + 8(origin rip)]
-		 * should be 16-byte aligned. Following code depend on
-		 * that stack_size is already 8-byte aligned.
+		/* 存在栈传参的情况，且我们需要在当前TRAMPOLINE中调用函数体。这种情
+		 * 况下，需要保证当前TRAMPOLINE的栈帧是16字节对齐的。
 		 */
 		if (bpf_trampoline_use_jmp(flags)) {
 			/* no rip in the "jmp" case */
@@ -3337,6 +3362,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 
 	arg_stack_off = stack_size;
 
+	/* 计算函数体的地址。通常情况下，是目标函数地址+5(nop)。 */
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/* skip patched call instruction and point orig_call to actual
 		 * body of the kernel function.
@@ -3484,6 +3510,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		}
 	}
 
+	/* 对于不存在FEXIT和MODIFY_RETURN类型的BPF程序的时候才会有这个标志，用于
+	 * 恢复寄存器中的值。
+	 */
 	if (flags & BPF_TRAMP_F_RESTORE_REGS)
 		restore_regs(m, &prog, regs_off);
 
@@ -3507,15 +3536,21 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	}
 
 	/* restore return value of orig_call or fentry prog back into RAX */
+	/* 对于origin call的情况，保存函数体的返回值到rax寄存器，作为TRAMPOLINE的
+	 * 返回值。
+	 */
 	if (save_ret)
 		emit_ldx(&prog, BPF_DW, BPF_REG_0, BPF_REG_FP, -8);
 
+	/* 恢复rbx寄存器 */
 	emit_ldx(&prog, BPF_DW, BPF_REG_6, BPF_REG_FP, -rbx_off);
 
 	EMIT1(0xC9); /* leave */
 	if (im)
 		im->ksym.fp_end = prog - (u8 *)rw_image;
-
+	/* 存在FEXIT和MODIFY_RETURN类型的BPF程序的话，会存在这个标志。通过将栈顶
+	 * 往上移动8字节，可以跳过目标函数的栈帧，直接返回到调用者那里。
+	 */
 	if (flags & BPF_TRAMP_F_SKIP_FRAME) {
 		/* skip our return address and return to parent */
 		EMIT4(0x48, 0x83, 0xC4, 8); /* add rsp, 8 */

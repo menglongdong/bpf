@@ -335,7 +335,8 @@ static unsigned long get_symbol_pos(unsigned long addr,
 }
 
 /*
- * Lookup an address but don't bother to find any names.
+ * 根据给定的ip地址，查找该地址对应的内核符号（函数），包括函数的指令长度、当前ip相对于
+ * 函数起始的偏移量等。
  */
 int kallsyms_lookup_size_offset(unsigned long addr, unsigned long *symbolsize,
 				unsigned long *offset)

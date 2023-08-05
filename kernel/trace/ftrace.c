@@ -1618,6 +1618,7 @@ static int ftrace_cmp_recs(const void *a, const void *b)
 	return 0;
 }
 
+/* 根据给定的指令地址，查找范围内第一个匹配的动态ftrace。 */
 static struct dyn_ftrace *lookup_rec(unsigned long start, unsigned long end)
 {
 	struct ftrace_page *pg;
@@ -1682,6 +1683,14 @@ unsigned long ftrace_location(unsigned long ip)
 	unsigned long offset;
 	unsigned long size;
 
+	/* 这里的ip分为两种情况，一种是基于mcount的（-pg），一种是基于__fentry__的
+	 * （-mfentry）。
+	 * 
+	 * 根据ip来从mcount record中进行对应实例的查找。这里先根据ip地址进行精确
+	 * 查找，这里是根据mcount call指令的地址进行查找的。如果没找到，那么就按照
+	 * 范围来查找，即查找处于当前的ip所属于的函数范围内的record，这里是根据
+	 * ip是__fentry__来查找的。
+	 */
 	loc = ftrace_location_range(ip, ip);
 	if (!loc) {
 		if (!kallsyms_lookup_size_offset(ip, &size, &offset))
@@ -2544,6 +2553,12 @@ ftrace_find_tramp_ops_curr(struct dyn_ftrace *rec)
 		if (!op->trampoline)
 			continue;
 
+		/* 遍历ftrace_ops_list链表中所有的具有trampoline的ops，查找当前
+		 * record对应的ops。每个ops都有对应的哈希表，存储着当前使用该ops的
+		 * 所有的record。通过这个，可以判断当前record是否正在使用该
+		 * trampoline。
+		 */
+
 		/*
 		 * If the ops is being added, it hasn't gotten to
 		 * the point to be removed from this tree yet.
@@ -2660,6 +2675,8 @@ unsigned long ftrace_get_addr_new(struct dyn_ftrace *rec)
 	struct ftrace_ops *ops;
 	unsigned long addr;
 
+	/* 查找当前record将要使用的处理函数。 */
+
 	if ((rec->flags & FTRACE_FL_DIRECT) &&
 	    (ftrace_rec_count(rec) == 1)) {
 		addr = ftrace_find_rec_direct(rec->ip);
@@ -2701,6 +2718,10 @@ unsigned long ftrace_get_addr_curr(struct dyn_ftrace *rec)
 	struct ftrace_ops *ops;
 	unsigned long addr;
 
+	/* 查找当前record上注册的处理函数。如果当前record上注册了direct call，那么
+	 * 就调用ftrace_find_rec_direct()从direct_functions哈希表中进行查找。
+	 */
+
 	/* Direct calls take precedence over trampolines */
 	if (rec->flags & FTRACE_FL_DIRECT_EN) {
 		addr = ftrace_find_rec_direct(rec->ip);
@@ -2721,6 +2742,9 @@ unsigned long ftrace_get_addr_curr(struct dyn_ftrace *rec)
 		return ops->trampoline;
 	}
 
+	/* 下面是两个通用的ftrace的处理函数，根据是否保存regs，分为 ftrace_aller()
+	 * 和 ftrace_regs_caller()。
+	 */
 	if (rec->flags & FTRACE_FL_REGS_EN)
 		return (unsigned long)FTRACE_REGS_ADDR;
 	else
@@ -2999,6 +3023,7 @@ static void ftrace_run_update_code(int command)
 	 * is safe. The stop_machine() is the safest, but also
 	 * produces the most overhead.
 	 */
+	/* 按照record的状态，更新所有的record的mcount call指令 */
 	arch_ftrace_update_code(command);
 
 	ftrace_arch_code_modify_post_process();
@@ -7536,6 +7561,9 @@ static void test_is_sorted(unsigned long *start, unsigned long count)
 }
 #endif
 
+/* 将存储在vmlinux中指定的段中的mcount record信息提取出来，并分配一定的内存，按照一定
+ * 的数据结构进行存储。其中，这块内存的地址会存放到全局变量ftrace_pages中去。
+ */
 static int ftrace_process_locs(struct module *mod,
 			       unsigned long *start,
 			       unsigned long *end)

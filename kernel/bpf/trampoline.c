@@ -406,8 +406,10 @@ static int modify_fentry(struct bpf_trampoline *tr, u32 orig_flags,
 	int ret;
 
 	if (tr->func.ftrace_managed) {
+		/* 进行了托管（ftrace本身也跟踪了这个函数），需要走ftrace那一套流程。 */
 		ret = direct_ops_mod(tr, new_addr, lock_direct_mutex);
 	} else {
+		/* 如果没有进行托管，那么直接更新对应位置的trampoline调用。 */
 		ret = bpf_trampoline_update_fentry(tr, orig_flags, old_addr,
 						   new_addr);
 	}
@@ -421,6 +423,9 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	unsigned long faddr;
 	int ret;
 
+	/* 检查当前的函数是否被ftrace托管了，即ftrace内核配置是否开启了。这里可以看
+	 * 出来，tracing是不依赖于ftrace功能的。
+	 */
 	faddr = ftrace_location((unsigned long)ip);
 	if (faddr) {
 		if (!tr->fops)
@@ -429,8 +434,10 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	}
 
 	if (tr->func.ftrace_managed) {
+		/* ftrace开启时使用direct ops路径注册。 */
 		ret = direct_ops_add(tr, new_addr);
 	} else {
+		/* 未托管时直接更新目标入口处的调用。 */
 		ret = bpf_trampoline_update_fentry(tr, 0, NULL, new_addr);
 	}
 
@@ -679,6 +686,7 @@ again:
 		goto out;
 	}
 
+	/* 调用架构相关的代码生成对应的trampoline指令集 */
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tlinks,
 					  tr->func.addr);
@@ -691,7 +699,7 @@ again:
 
 	WARN_ON(tr->cur_image && total == 0);
 	if (tr->cur_image)
-		/* progs already running at this address */
+		/* 当前tr上已经注册过trampoline，这里只做替换。 */
 		err = modify_fentry(tr, orig_flags, tr->cur_image->image,
 				    im->image, lock_direct_mutex);
 	else

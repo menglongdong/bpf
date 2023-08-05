@@ -200,6 +200,9 @@ int ftrace_update_ftrace_func(ftrace_func_t func)
 	return 0;
 }
 
+/* 进行指令的替换（更新）。这个函数针对的是全局的，即它会遍历所有的record来检查其状态，
+ * 判断是否需要进行更新。
+ */
 void ftrace_replace_code(int enable)
 {
 	struct ftrace_rec_iter *iter;
@@ -210,6 +213,7 @@ void ftrace_replace_code(int enable)
 	for_ftrace_rec_iter(iter) {
 		rec = ftrace_rec_iter_record(iter);
 
+		/* 检查当前record的状态，并获取其对应的指令数据 */
 		switch (ftrace_test_record(rec, enable)) {
 		case FTRACE_UPDATE_IGNORE:
 		default:
@@ -221,10 +225,14 @@ void ftrace_replace_code(int enable)
 
 		case FTRACE_UPDATE_MODIFY_CALL:
 		case FTRACE_UPDATE_MAKE_NOP:
+			/* 根据当前record所绑定的处理函数，生成对应的call指令，
+			 * 该指令理论上应该是当前ip处的指令。
+			 */
 			old = ftrace_call_replace(rec->ip, ftrace_get_addr_curr(rec));
 			break;
 		}
 
+		/* 验证当前ip处的指令和理论上的是否一致 */
 		ret = ftrace_verify_code(rec->ip, old);
 		if (ret) {
 			ftrace_expected = old;
@@ -234,6 +242,9 @@ void ftrace_replace_code(int enable)
 		}
 	}
 
+	/* 下面的代码将需要进行更新的record进行指令的更新，根据当前record当前的状态
+	 * （flags）来对其进行更新。
+	 */
 	for_ftrace_rec_iter(iter) {
 		rec = ftrace_rec_iter_record(iter);
 
