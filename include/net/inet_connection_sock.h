@@ -107,6 +107,9 @@ struct inet_connection_sock {
 	__u8			  icsk_retransmits;
 	/* 当前套接口上处于pending状态的定时器的掩码 */
 	__u8			  icsk_pending;
+	/* 这个主要用于0窗口探测的时候计算超时时间的。0窗口探测不会修改icsk->sk_rto，
+	 * 而是通过这个字段来计算出来的。
+	 */
 	__u8			  icsk_backoff;
 	__u8			  icsk_syn_retries;
 	__u8			  icsk_probes_out;

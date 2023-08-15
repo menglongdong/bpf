@@ -2585,7 +2585,10 @@ void tcp_enter_loss(struct sock *sk)
 		tcp_ca_event(sk, CA_EVENT_LOSS);
 		tcp_init_undo(tp);
 	}
-	/* 将拥塞窗口设置为在传数据+1。这里的+1是为了对丢失的数据进行立刻重传。 */
+	/* 将拥塞窗口设置为在传数据+1。这里的+1是为了对丢失的数据进行立刻重传。
+	 * 由于上面已经把所有的数据都标记为lost（除了被SACK的），所以刚开始的时候
+	 * 这里的拥塞窗口大小就是1？后面每次定时器超时都会将其+1
+	 */
 	tcp_snd_cwnd_set(tp, tcp_packets_in_flight(tp) + 1);
 	/* 线性增长计数清零。 */
 	tp->snd_cwnd_cnt   = 0;
@@ -2979,7 +2982,7 @@ static bool tcp_try_undo_dsack(struct sock *sk)
 		/* 
 		 * 如果处于拥塞状态，并且不存在可撤销的重传（不存在重传数据），
 		 * 那么进行拥塞的恢复。在检测到dsack的时候，会将undo_retrans
-		 * 清除。
+		 * 清除。这里的tp->undo_retrans会在解析SACK的时候被修改。
 		 */
 		tp->rack.reo_wnd_persist = min(TCP_RACK_RECOVERY_THRESH,
 					       tp->rack.reo_wnd_persist + 1);
@@ -3533,10 +3536,11 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 			/* 如果snd_una没有改变，说明是个重复ack报文，增加SACKED计数 */
 			if (tcp_is_reno(tp))
 				tcp_add_reno_sack(sk, num_dupack, ece_ack);
-			} else if (tcp_try_undo_partial(sk, prior_snd_una))
-				return;
+				/* 确认了新数据后，尝试进行伪重传恢复。 */
+				} else if (tcp_try_undo_partial(sk, prior_snd_una))
+					return;
 
-			/* 如果拥塞撤销成功，那么尝试恢复到Open状态，并且返回。 */
+		/* 尝试使用DSACK算法检查伪重传，并对当前的拥塞状态进行恢复。 */
 		if (tcp_try_undo_dsack(sk))
 			tcp_try_to_open(sk, flag);
 
@@ -3574,7 +3578,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 
 		/*
 		 * 前面如果收到了dsack，那么会清空可撤销的重传报文计数。
-		 * 这种情况下，进行拥塞的恢复。
+		 * 这种情况下，进行拥塞的恢复，即使用DSACK算法进行伪重传检查。
 		 */
 		if (icsk->icsk_ca_state <= TCP_CA_Disorder)
 			tcp_try_undo_dsack(sk);
@@ -4608,7 +4612,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (tcp_ack_is_dubious(sk, flag)) {
 		/*
 		 * 如果是可疑报文，那么进行拥塞控制的处理。可疑报文指的是：当前套接口处于
-		 * 拥塞控制状态、ACK是个重复ACK等。
+		 * 拥塞控制状态、ACK是个重复ACK、存在SACK块等。
 		 */
 		if (!(flag & (FLAG_SND_UNA_ADVANCED |
 			      FLAG_NOT_DUP | FLAG_DSACKING_ACK))) {
@@ -7699,7 +7703,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			 * 这是为了确保套接口处于TW状态下的时间不会大于
 			 * TCP_TIMEWAIT_LEN？暂未搞懂原因。
 			 *
-			 * 该定时器的处理函数为tcp_keepalive_timer，在FIN2状态下
+			 * 该定时器的处理函数为 tcp_keepalive_timer ，在FIN2状态下
 			 * 会调用tcp_time_wait，进入TW状态。
 			 */
 			tcp_reset_keepalive_timer(sk, tmo - TCP_TIMEWAIT_LEN);

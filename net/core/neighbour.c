@@ -1605,6 +1605,11 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 		struct net_device *dev = neigh->dev;
 		unsigned int seq;
 
+		/* 如果neigh的状态OK，那么会走到这里。如果不OK，比如处于INCOMPLETE
+		 * 状态，那么neigh会将skb放入到 neigh->arp_queue 队列中，前提
+		 * 是这个队列还没有满。
+		 */
+
 		if (dev->header_ops->cache && !READ_ONCE(neigh->hh.hh_len))
 			neigh_hh_init(neigh);
 

@@ -1355,6 +1355,11 @@ int e1000_open(struct net_device *netdev)
 	struct e1000_hw *hw = &adapter->hw;
 	int err;
 
+	/* 网口设备被启用的时候调用，用来将网口设置成UP状态。这里会将其设置为NOCARRIER
+	 * 状态，watchdog在检查到网口可用后会将其设置为ON状态。这里还会进行中断的
+	 * 注册。
+	 */
+
 	/* disallow open during test */
 	if (test_bit(__E1000_TESTING, &adapter->flags))
 		return -EBUSY;
@@ -3769,10 +3774,14 @@ static irqreturn_t e1000_intr(int irq, void *data)
 			schedule_delayed_work(&adapter->watchdog_task, 1);
 	}
 
-	/* disable interrupts, without the synchronize_irq bit */
+	/* 关闭硬中断 */
 	ew32(IMC, ~0);
 	E1000_WRITE_FLUSH();
 
+	/* 检查轮询状态机是否需要调度，在NAPI没有被禁用且没有已经被调度的NAPI时进行调度，
+	 * 因为只允许一个轮询状态机允许。 将当前的NAPI对象加入到链表中，并唤醒当前CPU
+	 * 上的软中断。
+	 */
 	if (likely(napi_schedule_prep(&adapter->napi))) {
 		adapter->total_tx_bytes = 0;
 		adapter->total_tx_packets = 0;

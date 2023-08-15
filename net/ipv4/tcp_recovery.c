@@ -144,6 +144,12 @@ void tcp_newreno_mark_lost(struct sock *sk, bool snd_una_advanced)
 	const u8 state = inet_csk(sk)->icsk_ca_state;
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	/* newreno算法进行丢包标记，即标记重传队列中的第一个skb为lost状态。两种情况会
+	 * 触发这里的标记：
+	 * 1. dup ack达到了一定的数量
+	 * 2. 当前处于recover状态，且当前的ack确认了新数据
+	 */
+
 	if ((state < TCP_CA_Recovery && tp->sacked_out >= tp->reordering) ||
 	    (state == TCP_CA_Recovery && snd_una_advanced)) {
 		struct sk_buff *skb = tcp_rtx_queue_head(sk);

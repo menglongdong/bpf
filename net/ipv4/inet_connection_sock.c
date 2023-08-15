@@ -1455,8 +1455,8 @@ int inet_csk_listen_start(struct sock *sk)
 	 * 再次调用sk_prot->get_port进行端口冲突检查以及绑定。
 	 *
 	 * 这是因为，listen之前可能没有调用bind，此时这里的作用就是随机分
-	 * 配一个监听端口。如果之前已经进行过bind，那么这里相当于在此检查
-	 * 有没有冲突，防止竟态问题。
+	 * 配一个监听端口。如果之前已经进行过bind，那么这里相当于再次检查
+	 * 有没有冲突，因为这个时候套接口的状态已经发生了改变。
 	 */
 
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);

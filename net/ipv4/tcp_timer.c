@@ -32,10 +32,16 @@ static u32 tcp_clamp_rto_to_user_timeout(const struct sock *sk)
 	u32 elapsed, user_timeout;
 	s32 remaining;
 
+	/* 如果没有设置user timeout，那么是直接取的当前sk的rto时间。这个时间会每次
+	 * *2，知道最大TCP_RTO_MAX。
+	 */
 	user_timeout = READ_ONCE(icsk->icsk_user_timeout);
 	if (!user_timeout)
 		return icsk->icsk_rto;
 
+	/* user timeout设置的是总的超时时间，如果总的超时时间没有超限，那么就取
+	 * 当前sk的RTO作为定时器超时时间；否则，去剩余的时间作为超时时间。
+	 */
 	elapsed = tcp_time_stamp_ts(tp) - tp->retrans_stamp;
 	if (tp->tcp_usec_ts)
 		elapsed /= USEC_PER_MSEC;
@@ -687,6 +693,7 @@ out_reset_timer:
 		 * activated.
 		 */
 		icsk->icsk_backoff++;
+		/* 正常情况下的逻辑，每次超时后RTO都*2，直到TCP_RTO_MAX */
 		icsk->icsk_rto = min(icsk->icsk_rto << 1, tcp_rto_max(sk));
 	}
 	tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS,

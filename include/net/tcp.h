@@ -862,6 +862,10 @@ static inline void tcp_bound_rto(struct sock *sk)
 
 static inline u32 __tcp_set_rto(const struct tcp_sock *tp)
 {
+	/* 
+	 * srtt_us/8 就是rtt。这里计算rto：rtt + rttvar_us。其中，rttvar_us
+	 * 一般不小于200ms，即TCP_RTO_MIN
+	 */
 	return usecs_to_jiffies((tp->srtt_us >> 3) + tp->rttvar_us);
 }
 

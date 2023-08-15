@@ -3870,6 +3870,7 @@ static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 	unsigned int len;
 	int rc;
 
+	/* 处理抓包程序。可以看出来，抓包在发送路径上也是相对比较底层的。 */
 	if (dev_nit_active_rcu(dev))
 		dev_queue_xmit_nit(skb, dev);
 
@@ -4265,16 +4266,16 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		to_free2 = qdisc_run_end(q);
 		rc = NET_XMIT_SUCCESS;
 	} else {
-		int count = 0;
+			int count = 0;
 
-		llist_for_each_entry_safe(skb, next, ll_list, ll_node) {
-			if (next) {
-				prefetch(next);
-				prefetch(&next->priority);
-				skb_mark_not_on_list(skb);
-			}
-			rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
-			count++;
+			llist_for_each_entry_safe(skb, next, ll_list, ll_node) {
+				if (next) {
+					prefetch(next);
+					prefetch(&next->priority);
+					skb_mark_not_on_list(skb);
+				}
+				rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
+				count++;
 		}
 		to_free2 = qdisc_run(q);
 		if (count != 1)
@@ -6098,6 +6099,10 @@ skip_classify:
 		}
 	}
 
+	/* 前面的vlan处理失败了，会走到这里。比如：没有找到对应的vlan设备、vlan网卡
+	 * 处于DOWN的状态等。这种情况下，如果vlan id不是0的话，就认为是OTHERHOST；
+	 * 否则，再往里找一层，下一层可能还是vlan协议，再处理一遍。
+	 */
 	if (unlikely(skb_vlan_tag_present(skb)) && !netdev_uses_dsa(skb->dev)) {
 check_vlan_id:
 		if (skb_vlan_tag_get_id(skb)) {
@@ -7927,6 +7932,11 @@ start:
 	list_splice_init(&sd->poll_list, &list);
 	local_irq_enable();
 
+	/* 进入skb处理流程。每个CPU上都有一个默认的napi实例，就是backlog对应的
+	 * napi，其poll函数为process_backlog，用于处理不支持NAPI模式的网卡驱动。
+	 * 基本原来为：网口驱动将报文放到backlog队列，在下半部中的这里再调用这个NAPI
+	 * 实例的process_backlog方法对其进行处理。
+	 */
 	for (;;) {
 		struct napi_struct *n;
 

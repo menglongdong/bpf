@@ -3165,6 +3165,13 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
 	if (rcu_access_pointer(tp->fastopen_rsk))
 		return false;
 
+	/* tcp_early_retrans 决定了TLP功能是否开启。同时，TLP只有在拥塞正常的
+	 * 情况下才会启用（包括CWR显式拥塞）。
+	 *
+	 * TLP的超时时间默认为2 *rtt。如果当前重传队列中只有一个报文，那么这里的
+	 * 超时时间和原来的是差不多的：2*rtt + 200ms；否则，就是：2*rtt + 2tick。
+	 * 也就是说这里保证至少是2个tick的超时时间。
+	 */
 	early_retrans = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_early_retrans);
 	/* Schedule a loss probe in 2*RTT for SACK capable connections
 	 * not in loss recovery, that are either limited by cwnd or application.
@@ -3230,7 +3237,7 @@ void tcp_send_loss_probe(struct sock *sk)
 	int pcount;
 	int mss = tcp_current_mss(sk);
 
-	/* At most one outstanding TLP */
+	/* TLP只触发一次，已经触发过了的话就启动RTO定时器 */
 	if (tp->tlp_high_seq)
 		goto rearm_timer;
 
@@ -4290,6 +4297,8 @@ static int tcp_send_syn_data(struct sock *sk, struct sk_buff *syn)
 	struct page_frag *pfrag = sk_page_frag(sk);
 	struct sk_buff *syn_data;
 	int space, err = 0;
+
+	/* 构建一个携带数据的SYN报文，其中的数据是从fo->data中拷贝过来的。 */
 
 	tp->rx_opt.mss_clamp = tp->advmss;  /* If MSS is not cached */
 	if (!tcp_fastopen_cookie_check(sk, &tp->rx_opt.mss_clamp, &fo->cookie))

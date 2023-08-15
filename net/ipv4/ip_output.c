@@ -261,7 +261,10 @@ static int ip_finish_output_gso(struct net *net, struct sock *sk,
 	netdev_features_t features;
 	int ret = 0;
 
-	/* common case: seglen is <= mtu
+	/* 检查skb的长度是否合法，合法的话会调用 ip_finish_output2 来继续进行下面
+	 * 的处理。这里是通常的情况，可以看出来没有在IP层进行IP分片。
+	 * 
+	 * 这里检查的是要分片的尺寸（gso_size）不能大于MTU，这是常规的情况。
 	 */
 	if (skb_gso_validate_network_len(skb, mtu))
 		return ip_finish_output2(net, sk, skb);
@@ -317,6 +320,7 @@ static int __ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *
 	if (skb_is_gso(skb))
 		return ip_finish_output_gso(net, sk, skb, mtu);
 
+	/* 根据报文大小来检查是否需要分片。 */
 	if (skb->len > mtu || IPCB(skb)->frag_max_size)
 		return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
@@ -787,12 +791,10 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 	    (err = skb_checksum_help(skb)))
 		goto fail;
 
-	/*
-	 *	Point into the IP datagram header.
-	 */
-
+	/* 提取出第一个skb的IP头部地址，作为所有片段的IP头部. */
 	iph = ip_hdr(skb);
 
+	/* 计算分片的MTU。 */
 	mtu = ip_skb_dst_mtu(sk, skb);
 	if (IPCB(skb)->frag_max_size && IPCB(skb)->frag_max_size < mtu)
 		mtu = IPCB(skb)->frag_max_size;
@@ -813,10 +815,15 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 	 * LATER: this step can be merged to real generation of fragments,
 	 * we can switch to copy when see the first bad fragment.
 	 */
+	/* 检查到skb存在frag_list，进入frag_list分片流程。 */
 	if (skb_has_frag_list(skb)) {
 		struct sk_buff *frag, *frag2;
+		/* 第一个skb线性和frags数据长度的总和，不包括分片队列的长度。 */
 		unsigned int first_len = skb_pagelen(skb);
 
+		/* 如果去除了分片队列的长度后，skb的长度还是大于MTU，则进入到
+		 * slow_path流程，即线性数据IP分片流程
+		 */
 		if (first_len - hlen > mtu ||
 		    ((first_len - hlen) & 7) ||
 		    ip_is_fragment(iph) ||
@@ -824,8 +831,12 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 		    skb_headroom(skb) < ll_rs)
 			goto slow_path;
 
+		/* 遍历skb的分片队列，检查每个片段是否有效。 */
 		skb_walk_frags(skb, frag) {
-			/* Correct geometry. */
+			/* 对于长度超标或者headroom不足的报文，进入到slow_path_clean
+			 * 流程。该流程会恢复skb片段的初始状态，并进入slow_path处理
+			 * 流程。
+			 */
 			if (frag->len > mtu ||
 			    ((frag->len & 7) && frag->next) ||
 			    skb_headroom(frag) < hlen + ll_rs)
@@ -843,16 +854,17 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 			skb->truesize -= frag->truesize;
 		}
 
-		/* Everything is OK. Generate! */
+		/* 初始化分片迭代器 */
 		ip_fraglist_init(skb, iph, hlen, &iter);
 
 		for (;;) {
-			/* Prepare header of the next frame,
-			 * before previous one went down. */
 			if (iter.frag) {
 				bool first_frag = (iter.offset == 0);
 
 				IPCB(iter.frag)->flags = IPCB(skb)->flags;
+				/* 根据分片迭代器，初始化下一个skb的头部信息，包括
+				 * 长度、偏移等。
+				 */
 				ip_fraglist_prepare(skb, &iter);
 				if (first_frag && IPCB(skb)->opt.optlen) {
 					/* ipcb->opt is not populated for frags
@@ -867,6 +879,7 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 			}
 
 			skb_set_delivery_time(skb, tstamp, tstamp_type);
+			/* 将当前skb发送出去。当前skb上的信息应该已经全部OK了的 */
 			err = output(net, sk, skb);
 
 			if (!err)
@@ -986,6 +999,7 @@ static int __ip_append_data(struct sock *sk,
 	unsigned int wmem_alloc_delta = 0;
 	u32 tskey = 0;
 
+	/* 取出发送队列最后一个skb */
 	skb = skb_peek_tail(queue);
 
 	/* 将msg中的数据添加到当前队列中。对于支持GSO的场景，MTU取最大IP报文长度，
@@ -998,15 +1012,22 @@ static int __ip_append_data(struct sock *sk,
 	 */
 
 	exthdrlen = !skb ? rt->dst.header_len : 0;
+	/* cork里面保存了IP分片过程中需要用到的很多参数，fragsize为MTU */
 	mtu = cork->gso_size ? IP_MAX_MTU : cork->fragsize;
 	paged = !!cork->gso_size;
 
 	hh_len = LL_RESERVED_SPACE(rt->dst.dev);
 
+	/* IP头部长度 */
 	fragheaderlen = sizeof(struct iphdr) + (opt ? opt->optlen : 0);
+	/* 最大片段长度，指的是IP报文总长度。 */
 	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen;
+	/* 最大允许的未分片的数据的尺寸。也就是说，数据的总长度不能超过这个值。
+	 * 如果sk设置的ignore_df（忽略禁止分片），那么其大小为0xFFFF；否则为MTU。
+	 */
 	maxnonfragsize = ip_sk_ignore_df(sk) ? IP_MAX_MTU : mtu;
 
+	/* cork->length为已经添加的数据长度。若数据长度超过允许的长度，返回EMSGSIZE。 */
 	if (cork->length + length > maxnonfragsize - fragheaderlen) {
 		ip_local_error(sk, EMSGSIZE, fl4->daddr, inet->inet_dport,
 			       mtu - (opt ? opt->optlen : 0));
@@ -1085,14 +1106,19 @@ static int __ip_append_data(struct sock *sk,
 	 * adding appropriate IP header.
 	 */
 
+	/* 对于GSO标志的报文，或者是支持UFO的网卡驱动（网卡驱动进行的UDP分段），
+	 * 使用ip_ufo_append_data方法来处理。该方法不会对报文进行分片。
+	 */
 	if (!skb)
 		goto alloc_new_skb;
 
+	/* 开始循环将报文数据添加到套接口的发送队列中。 */
 	while (length > 0) {
 		/* Check if the remaining data fits into current packet. */
 		copy = mtu - skb->len;
 		if (copy < length)
 			copy = maxfraglen - skb->len;
+		/* 当前skb满了，重新分配一个新的skb。 */
 		if (copy <= 0) {
 			char *data;
 			unsigned int datalen;
@@ -1108,16 +1134,16 @@ alloc_new_skb:
 			else
 				fraggap = 0;
 
-			/*
-			 * If remaining data exceeds the mtu,
-			 * we know we need more fragment(s).
-			 */
+			/* datalen为要拷贝的数据的长度（不包括报文头部） */
 			datalen = length + fraggap;
 			if (datalen > mtu - fragheaderlen)
 				datalen = maxfraglen - fragheaderlen;
 			fraglen = datalen + fragheaderlen;
 			pagedlen = 0;
 
+			/* 计算需要分配的skb线性缓存区的大小。该大小由报文长度、
+			 * headroom和tailroom组成。
+			 */
 			alloc_extra = hh_len + 15;
 			alloc_extra += exthdrlen;
 
@@ -1150,6 +1176,7 @@ alloc_new_skb:
 			 */
 
 			if (transhdrlen) {
+				/* 进行skb的创建 */
 				skb = sock_alloc_send_skb(sk, alloclen,
 						(flags & MSG_DONTWAIT), &err);
 			} else {
@@ -1169,17 +1196,24 @@ alloc_new_skb:
 			 */
 			skb->ip_summed = csummode;
 			skb->csum = 0;
+			/* 开辟headroom。在此之前，head、data、tail指向同一位置：
+			 * 线性缓存区的头部。
+			 */
 			skb_reserve(skb, hh_len);
 
-			/*
-			 *	Find where to start putting bytes.
-			 */
+			/* 开辟data空间，将tail往下移动，并增加len计数。 */
 			data = skb_put(skb, fraglen + exthdrlen - pagedlen);
+			/* 设置三层协议报头偏移。 */
 			skb_set_network_header(skb, exthdrlen);
+			/* 设置四层协议报头偏移。 */
 			skb->transport_header = (skb->network_header +
 						 fragheaderlen);
+			/* 此时data指向了IP数据区 */
 			data += fragheaderlen + exthdrlen;
 
+			/* fraggap代表上一个skb多余的数据长度，要转移到当前的skb。
+			 * 不太懂这种操作。
+			 */
 			if (fraggap) {
 				skb->csum = skb_copy_and_csum_bits(
 					skb_prev, maxfraglen,
@@ -1196,8 +1230,10 @@ alloc_new_skb:
 			 * 进行。
 			 */
 			copy = datalen - transhdrlen - fraggap - pagedlen;
-			/* [!] NOTE: copy will be negative if pagedlen>0
-			 * because then the equation reduces to -fraggap.
+			/*
+			 * getfrag是用于对from进行数据分片的函数，其可以是raw_getfrag、udp_getfrag等。
+			 * 对于raw_getfrag，它所做的事情是把msg迭代器中的copy长度的报文数据拷贝到skb的报文区。
+			 * 其实这里的offset没有多大的意义，因为msg迭代器拷贝时会从上一次结束的地方重新开始。
 			 */
 			if (copy > 0 &&
 			    INDIRECT_CALL_1(getfrag, ip_generic_getfrag,
@@ -1234,6 +1270,9 @@ alloc_new_skb:
 				skb->sk = sk;
 				wmem_alloc_delta += skb->truesize;
 			}
+			/* 将新创建的skb添加到发送队列。从这里我们可以看出，其并没有
+			 * 对IP头部进行初始化，只是保留了IP头部空间。
+			 */
 			__skb_queue_tail(queue, skb);
 			continue;
 		}
@@ -1250,6 +1289,7 @@ alloc_new_skb:
 		if (copy > length)
 			copy = length;
 
+		/* 设备不支持分散聚合IO，并且skb的tailroom有足够的空间。 */
 		if (!(rt->dst.dev->features&NETIF_F_SG) &&
 		    skb_tailroom(skb) >= copy) {
 			unsigned int off;
@@ -1277,11 +1317,19 @@ alloc_new_skb:
 		} else if (!zc) {
 			int i = skb_shinfo(skb)->nr_frags;
 
+			/* 使用frags。此时，skb里存的数据量还没有达到MTU，但是线性
+			 * 缓存区已经满了。
+			 */
 			err = -ENOMEM;
 			if (!sk_page_frag_refill(sk, pfrag))
 				goto error;
 
 			skb_zcopy_downgrade_managed(skb);
+			/* 检查当前的pfrag是不是已经处于skb的frags中了，即pfrag
+			 * 是skb中的第i-1个frag。如果是的话，不需要进行什么处理；
+			 * 否则，将pfrag里的page信息赋值给frag，相当于新增了一个
+			 * frag。
+			 */
 			if (!skb_can_coalesce(skb, i, pfrag->page,
 					      pfrag->offset)) {
 				err = -EMSGSIZE;
@@ -1294,6 +1342,9 @@ alloc_new_skb:
 				get_page(pfrag->page);
 			}
 			copy = min_t(int, copy, pfrag->size - pfrag->offset);
+			/* 拷贝当前pfrag剩余空间的数据量到page中去。这里好像没有预留
+			 * 报文头部？
+			 */
 			if (INDIRECT_CALL_1(getfrag, ip_generic_getfrag,
 				    from,
 				    page_address(pfrag->page) + pfrag->offset,
@@ -1452,6 +1503,9 @@ struct sk_buff *__ip_make_skb(struct sock *sk,
 	 * 将队列中所有的IP片段合并成一个IP数据报，然后将其从队列中取出以进行发送。
 	 * 这里只有第一个报文的IP头部被构造了出来，其他报文的头部会在分片阶段进行
 	 * 构造。
+	 * 
+	 * 对于支持GSO的情况，这里的队列中应该只有一个skb，所有的数据都已经被放到
+	 * 了frags中。这是针对UDP/RAW的情况。
 	 */
 
 	skb = __skb_dequeue(queue);

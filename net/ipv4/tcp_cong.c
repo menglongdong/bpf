@@ -524,6 +524,7 @@ __bpf_kfunc u32 tcp_reno_ssthresh(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 将慢启动阈值降为原来的一半，LOST以及RECOVERY都是这种操作。 */
 	return max(tcp_snd_cwnd(tp) >> 1U, 2U);
 }
 EXPORT_SYMBOL_GPL(tcp_reno_ssthresh);

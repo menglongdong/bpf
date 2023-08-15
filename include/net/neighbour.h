@@ -547,7 +547,7 @@ static inline int neigh_output(struct neighbour *n, struct sk_buff *skb,
 
 	/* 
 	 * 如果当前邻居项有效，且存在hh缓存，那么调用neigh_hh_output函数。
-	 * 否则，调用钩子函数，该函数可能为neigh_resolve_output（邻居无效）
+	 * 否则，调用钩子函数，该函数可能为 neigh_resolve_output （邻居无效）
 	 * 或者 neigh_connected_output （邻居有效）。
 	 * 
 	 * 如果邻居无效，会更新邻居，并将报文挂到邻居的缓存队列中。

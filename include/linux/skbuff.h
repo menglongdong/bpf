@@ -891,7 +891,9 @@ enum skb_tstamp_type {
 struct sk_buff {
 	union {
 		struct {
-			/* These two members must be first to match sk_buff_head. */
+			/* 以链表的方式将skb组装起来。处于同一个链表中的报文都是
+			 * 相对独立的不同的报文，不同于frags以及frag_list。
+			 */
 			struct sk_buff		*next;
 			struct sk_buff		*prev;
 

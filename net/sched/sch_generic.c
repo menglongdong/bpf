@@ -351,7 +351,9 @@ bool sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	if (root_lock)
 		spin_unlock(root_lock);
 
-	/* Note that we validate skb (GSO, checksum, ...) outside of locks */
+	/* 主要进行GSO的检查。通过检查当前网口的特性来判断是否需要进行GSO还是TSO。如果
+	 * 不支持TSO的话，那么这里会调用对应的上层钩子函数进行报文的分段。
+	 */
 	if (validate)
 		skb = validate_xmit_skb_list(skb, dev, &again);
 

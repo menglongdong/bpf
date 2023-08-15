@@ -478,6 +478,8 @@ int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMREQDS);
 
+	/* 进行IP分片的重组 */
+
 	/* Lookup (or create) queue header */
 	rcu_read_lock();
 	dev = skb->dev ? : skb_dst_dev_rcu(skb);
