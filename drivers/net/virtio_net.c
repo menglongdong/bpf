@@ -3286,6 +3286,7 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb, bool orphan)
 	else
 		hdr = &skb_vnet_common_hdr(skb)->tnl_hdr;
 
+	/* 根据skb里的信息构造virtio头数据。 */
 	if (virtio_net_hdr_tnl_from_skb(skb, hdr, vi->tx_tnl,
 					virtio_is_little_endian(vi->vdev), 0,
 					false))
@@ -3294,15 +3295,20 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb, bool orphan)
 	if (vi->mergeable_rx_bufs)
 		hdr->hash_hdr.hdr.num_buffers = 0;
 
+	/* 将sq->sg中一定数量的scatterlist初始化成0 */
 	sg_init_table(sq->sg, skb_shinfo(skb)->nr_frags + (can_push ? 1 : 2));
 	if (can_push) {
 		__skb_push(skb, hdr_len);
+		/* 将skb中的数据填充到sg数组中，其中线性区会填充到数组中的第一个实例
+		 * 中，这里会将virtio头也填充进去。
+		 */
 		num_sg = skb_to_sgvec(skb, sq->sg, 0, skb->len);
 		if (unlikely(num_sg < 0))
 			return num_sg;
-		/* Pull header back to avoid skew in tx bytes calculations. */
+		/* 恢复skb的原始头部 */
 		__skb_pull(skb, hdr_len);
 	} else {
+		/* skb线性区没有足够的空间容纳virtio头，单独分配一个sg来存放 */
 		sg_set_buf(sq->sg, hdr, hdr_len);
 		num_sg = skb_to_sgvec(skb, sq->sg + 1, 0, skb->len);
 		if (unlikely(num_sg < 0))
@@ -3310,6 +3316,7 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb, bool orphan)
 		num_sg++;
 	}
 
+	/* 将构造的sg数组添加到virtioqueue的ringbuf中去。就这么简单？ */
 	return virtnet_add_outbuf(sq, num_sg, skb,
 				  orphan ? VIRTNET_XMIT_TYPE_SKB_ORPHAN : VIRTNET_XMIT_TYPE_SKB);
 }

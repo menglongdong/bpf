@@ -133,7 +133,9 @@ struct vring_virtqueue_split {
 };
 
 struct vring_virtqueue_packed {
-	/* Actual memory layout for this queue. */
+	/* 当前virtqueue对应的ringbuf。其中，num代表ringbuf中的实例总个数，
+	 * desc代表实例数组的地址。
+	 */
 	struct {
 		unsigned int num;
 		struct vring_packed_desc *desc;
@@ -147,7 +149,7 @@ struct vring_virtqueue_packed {
 	/* Avail used flags. */
 	u16 avail_used_flags;
 
-	/* Index of the next avail descriptor. */
+	/* 当前可用的ringbuf实例的索引 */
 	u16 next_avail_idx;
 
 	/*
@@ -1683,6 +1685,10 @@ static inline int virtqueue_add_packed(struct vring_virtqueue *vq,
 		for (sg = sgs[n]; sg; sg = sg_next(sg)) {
 			dma_addr_t addr;
 
+			/* 遍历所有的sg，将sg实例上的page地址转为dma地址，随后将
+			 * sg对应的信息设置到ringbuf的desc上。通过desc->flags
+			 * 后端可以知道当前desc是否有下一个，以及其用途。
+			 */
 			if (vring_map_one_sg(vq, sg, n < out_sgs ?
 					     DMA_TO_DEVICE : DMA_FROM_DEVICE,
 					     &addr, &len, premapped, attr))
@@ -1710,6 +1716,7 @@ static inline int virtqueue_add_packed(struct vring_virtqueue *vq,
 			prev = curr;
 			curr = vq->packed.desc_extra[curr].next;
 
+			/* 到达ringbuf的尾部了，绕到开头 */
 			if ((unlikely(++i >= vq->packed.vring.num))) {
 				i = 0;
 				vq->packed.avail_used_flags ^=
@@ -1719,6 +1726,7 @@ static inline int virtqueue_add_packed(struct vring_virtqueue *vq,
 		}
 	}
 
+	/* 回绕的话，进行异或操作，最后一位取反。 */
 	if (i <= head)
 		vq->packed.avail_wrap_counter ^= 1;
 
