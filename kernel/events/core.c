@@ -11328,7 +11328,11 @@ void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
 			       struct task_struct *task)
 {
 	if (bpf_prog_array_valid(call)) {
+		/* 将regs信息赋值到entry上，这里可以这样操作是因为entry的第一个
+		 * 字段的类型为struct pt_regs *（我猜的）
+		 */
 		*(struct pt_regs **)raw_data = regs;
+		/* 将entry（raw_data)作为ctx，运行当前perf实例上的eBPF程序 */
 		if (!trace_call_bpf(call, raw_data) || hlist_empty(head)) {
 			perf_swevent_put_recursion_context(rctx);
 			return;
@@ -11403,6 +11407,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
 
 	perf_trace_buf_update(record, event_type);
 
+	/* 遍历所有的事件监听者，来将事件传递出去？ */
 	hlist_for_each_entry_rcu(event, head, hlist_entry) {
 		if (perf_tp_event_match(event, &raw, regs)) {
 			/*
@@ -11656,6 +11661,9 @@ static int __perf_event_set_bpf_prog(struct perf_event *event,
 		return -EINVAL;
 
 	if (is_tracepoint || is_syscall_tp) {
+		/* 获取当前event的entry的最大长度，判断eBPF程序对于entry的访问
+		 * 是否超过了最大偏移量。
+		 */
 		int off = trace_event_get_offsets(event->tp_event);
 
 		if (prog->aux->max_ctx_offset > off)

@@ -408,12 +408,16 @@ do_trace_event_raw_event_##call(void *__data, proto)			\
 	struct trace_event_file *trace_file = __data;			\
 	struct trace_event_data_offsets_##call __maybe_unused __data_offsets;\
 	struct trace_event_buffer fbuffer;				\
+	/* 这里的entry用来存放ftrace的参数，也就是tracepoint里定义的field */	\
 	struct trace_event_raw_##call *entry;				\
 	int __data_size;						\
 									\
 	if (trace_trigger_soft_disabled(trace_file))			\
 		return;							\
 									\
+	/* 这里获取到的是当前的tracepoint的动态字段的长度。比如定义为string的	\
+	 * 字段都是动态字段，这个函数可以计算出所有动态字段长度的总和。		\
+	 */\
 	__data_size = trace_event_get_offsets_##call(&__data_offsets, args); \
 									\
 	entry = trace_event_buffer_reserve(&fbuffer, trace_file,	\
@@ -423,9 +427,10 @@ do_trace_event_raw_event_##call(void *__data, proto)			\
 		return;							\
 									\
 	tstruct								\
-									\
+	/* 用来将传递给tracepoint的值设置到entry上（entry的初始化） */		\
 	{ assign; }							\
 									\
+	/* 提交处理 */\
 	trace_event_buffer_commit(&fbuffer);				\
 }
 

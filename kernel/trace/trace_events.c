@@ -3325,6 +3325,9 @@ static char *eval_replace(char *ptr, struct trace_eval_map *map, int len)
 	return ptr + elen;
 }
 
+/* 更新event的format格式化字符串输出。这里会把eval_map中的数据填充到fmt中，通过
+ * 这种方式，可以将内核中的一些枚举的值导出。
+ */
 static void update_event_printk(struct trace_event_call *call,
 				struct trace_eval_map *map)
 {
@@ -3560,6 +3563,10 @@ void trace_event_update_all(struct trace_eval_map **map, int len)
 	int last_i;
 	int i;
 
+	/* 遍历所有的event，并更新其中的fmt。在更新的时候，会找出和当前event属于同一
+	 * 个模块内的eval_map来进行更新。这就要求，event要和对应的map在同一个模块中
+	 * 才行哦。
+	 */
 	down_write(&trace_event_sem);
 	list_for_each_entry_safe(call, p, &ftrace_events, list) {
 		/* events are usually grouped together with systems */

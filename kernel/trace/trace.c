@@ -10018,6 +10018,7 @@ static void __init eval_map_work_func(struct work_struct *work)
 	trace_event_update_with_eval_map(NULL, __start_ftrace_eval_maps, len);
 }
 
+/* 内核全局的event fmt更新函数，会在tracefs挂载（创建）的时候被调用。 */
 static int __init trace_eval_init(void)
 {
 	INIT_WORK(&eval_map_work, eval_map_work_func);

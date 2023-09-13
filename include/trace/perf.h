@@ -19,6 +19,7 @@ do_perf_trace_##call(void *__data, proto)				\
 {									\
 	struct trace_event_call *event_call = __data;			\
 	struct trace_event_data_offsets_##call __maybe_unused __data_offsets;\
+	/* 这里的entry用来存放ftrace的参数，也就是tracepoint里定义的field */\
 	struct trace_event_raw_##call *entry;				\
 	struct pt_regs *__regs;						\
 	u64 __count = 1;						\
@@ -28,6 +29,9 @@ do_perf_trace_##call(void *__data, proto)				\
 	int __data_size;						\
 	int rctx;							\
 									\
+	/* 这里获取到的是当前的tracepoint的动态字段的长度。比如定义为string的\
+	 * 字段都是动态字段，这个函数可以计算出所有动态字段长度的总和。\
+	 */\
 	__data_size = trace_event_get_offsets_##call(&__data_offsets, args); \
 									\
 	head = this_cpu_ptr(event_call->perf_events);			\
@@ -40,14 +44,17 @@ do_perf_trace_##call(void *__data, proto)				\
 			     sizeof(u64));				\
 	__entry_size -= sizeof(u32);					\
 									\
+	/* 根据计算出来的尺寸来分配entry的内存 */\
 	entry = perf_trace_buf_alloc(__entry_size, &__regs, &rctx);	\
 	if (!entry)							\
 		return;							\
 									\
+	/* 获取寄存器数据 */\
 	perf_fetch_caller_regs(__regs);					\
 									\
 	tstruct								\
 									\
+	/* 用来将传递给tracepoint的值设置到entry上（entry的初始化） */\
 	{ assign; }							\
 									\
 	perf_trace_run_bpf_submit(entry, __entry_size, rctx,		\
