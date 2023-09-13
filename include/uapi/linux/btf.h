@@ -29,6 +29,9 @@ struct btf_header {
 #define BTF_MAX_VLEN	0xffff
 
 struct btf_type {
+	/* 当前类型的名称在符号表中的偏移量，通过btf_name_by_offset可以将这个偏移
+	 * 转为字符串。
+	 */
 	__u32 name_off;
 	/* "info" bits arrangement
 	 * bits  0-15: vlen (e.g. # of struct's members)
@@ -39,6 +42,13 @@ struct btf_type {
 	 *             struct, union, enum, fwd, enum64,
 	 *             decl_tag and type_tag
 	 */
+	/* 
+	 * 有多重用途：
+	 * - 0-15位：用于记录当前类型的成员数量。对于结构体，其保存了结构体中字段的个数；
+	 *   对于函数，其记录了函数的参数的个数等。
+	 * - 24-27位：记录了当前BTF的类型，代表的是结构体，还是枚举，还是函数等。
+	 * - 31位：标志位，不同的类型有不同的用途。
+	 */
 	__u32 info;
 	/* "size" is used by INT, ENUM, STRUCT, UNION, DATASEC and ENUM64.
 	 * "size" tells the size of the type it is describing.
@@ -47,6 +57,14 @@ struct btf_type {
 	 * FUNC, FUNC_PROTO, VAR, DECL_TAG and TYPE_TAG.
 	 * "type" is a type_id referring to another type.
 	 */
+	/* 
+	 * 如果当前类型是INT, ENUM, STRUCT, UNION 或者 DATASEC，那么size会被
+	 * 使用，代表的是当前类型的长度（以字节为单位）。
+	 * 
+	 * 如果当前类型是PTR, TYPEDEF, VOLATILE, CONST, RESTRICT,
+	 * FUNC, FUNC_PROTO 或者 VAR，那么type会被使用。这时，type代表的是当前
+	 * 类型所关联的类型的id。比如当前类型是个“int *”（指针），那么type存储的
+	 * 就是类型int的BTF的id。
 	union {
 		__u32 size;
 		__u32 type;

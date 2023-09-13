@@ -1806,6 +1806,7 @@ struct bpf_prog {
 	u8 __percpu		*active;	/* u8[BPF_NR_CONTEXTS] for recursion protection */
 	unsigned int		(*bpf_func)(const void *ctx,
 					    const struct bpf_insn *insn);
+	/* BPF辅助结构体（乱七八糟的都放进去了） */
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
 	/* Instructions for interpreter */
