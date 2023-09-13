@@ -612,6 +612,7 @@ void taskstats_exit(struct task_struct *tsk, int group_dead)
 	 */
 	size = taskstats_packet_size();
 
+	/* 分配进程统计信息。 */
 	is_thread_group = !!taskstats_tgid_alloc(tsk);
 	if (is_thread_group) {
 		/* PID + STATS + TGID + STATS */

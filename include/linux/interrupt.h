@@ -757,6 +757,13 @@ extern void __tasklet_schedule(struct tasklet_struct *t);
 
 static inline void tasklet_schedule(struct tasklet_struct *t)
 {
+	/* 
+	 * 将tasklet任务加到当前CPU的tasklet链表上。会先检查这个tasklet
+	 * 是否是处于等待调度阶段（SCHED），如果不是的话，那么对其进行调度，
+	 * 将其加到当前CPU的tasklet链表。
+	 * 
+	 * 完事之后，还会触发tasklet的软中断。
+	 */
 	if (!test_and_set_bit(TASKLET_STATE_SCHED, &t->state))
 		__tasklet_schedule(t);
 }

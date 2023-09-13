@@ -1122,7 +1122,14 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	io_uring_task_cancel();
 
-	/* Ensure the files table is not shared. */
+	/* 这个方法会对共享的files_struct进行解耦：如果当前进程的files_struct与
+	 * 别的进程共享，那么做一份拷贝，否则不做处理。
+	 * 
+	 * 拷贝的时候，会把当前打开文件列表也拷贝进去，displaced存放的是原来
+	 * 老的files_struct
+	 * 
+	 * 可以看出，只有创建进程时指定了CLONE_FILES标志才会需要解耦。
+	 */
 	retval = unshare_files();
 	if (retval)
 		goto out;
@@ -1402,6 +1409,7 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 	if (IS_ERR(file))
 		return ERR_CAST(file);
 
+	/* 分配一个 binprm，该结构体用于存储运行可执行程序期间的参数。 */
 	bprm = kzalloc_obj(*bprm);
 	if (!bprm) {
 		do_close_execat(file);
@@ -1410,6 +1418,7 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 
 	bprm->file = file;
 
+	/* 获取可执行程序的文件名（绝对路径） */
 	if (fd == AT_FDCWD || filename->name[0] == '/') {
 		bprm->filename = filename->name;
 	} else {
@@ -1431,6 +1440,10 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 		 * the interpreter.  This makes for a better user experience
 		 * than having the interpreter start and then immediately fail
 		 * when it finds the executable is inaccessible.
+		 */
+		/* 
+		 * 如果fd设置了O_CLOEXEC，那么执行可执行程序后将不可见该目录，
+		 * 将其记录下来（还没搞懂）。
 		 */
 		if (get_close_on_exec(fd))
 			bprm->interp_flags |= BINPRM_FLAGS_PATH_INACCESSIBLE;
@@ -1454,6 +1467,7 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 	 */
 	bprm->is_check = !!(flags & AT_EXECVE_CHECK);
 
+	/* 为可执行程序分配一个mm，同时分配一个用于表示栈的vma */
 	retval = bprm_mm_init(bprm);
 	if (!retval)
 		return bprm;
@@ -1647,6 +1661,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 	struct linux_binfmt *fmt;
 	int retval;
 
+	/* 初始化以及文件的权限、 读取文件的前128个字节到bprm的buf*/
 	retval = prepare_binprm(bprm);
 	if (retval < 0)
 		return retval;
@@ -1725,6 +1740,7 @@ static int bprm_execve(struct linux_binprm *bprm)
 {
 	int retval;
 
+	/* 为可执行程序分配一个credentials */
 	retval = prepare_bprm_creds(bprm);
 	if (retval)
 		return retval;
@@ -1745,10 +1761,21 @@ static int bprm_execve(struct linux_binprm *bprm)
 	if (retval || bprm->is_check)
 		goto out;
 
+	/**
+	 * 开始执行文件，该函数会查找该文件格式所对应的处理钩子来执行。
+	 * 基本上后面的工作都是在这里完成，比如mm的切换（用户态栈的切换）
+	 * 等。由于mm的变动不影响内核栈，所以当前上限文代码的执行不会
+	 * 受影响。
+	 * 
+	 * 这个里面会将当前进程的mm替换成上面新创建的mm，并将内核栈底部的
+	 * 存放用户态返回地址的寄存器值改成新的mm里的用户态栈，从而进程
+	 * 在返回用户态后就可以直接运行新的程序了。
+	 */
 	retval = exec_binprm(bprm);
 	if (retval < 0)
 		goto out;
 
+	/* 成功了，下面做一些清理工作。 */
 	sched_mm_cid_after_execve(current);
 	rseq_execve(current);
 	/* execve succeeded */
@@ -1780,13 +1807,19 @@ static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr envp,
 			      int flags)
 {
+	/**
+	 * fd为目录，这个在filename为相对路径的时候才会有作用，默认情况下
+	 * 是当前进程的工作目录。
+	 * 
+	 * argv为传递给可执行程序的启动参数
+	 * 
+	 * envp为环境变量。
+	 */
+	struct linux_binprm *bprm;
 	int retval;
 
 	/*
-	 * We move the actual failure in case of RLIMIT_NPROC excess from
-	 * set*uid() to execve() because too many poorly written programs
-	 * don't check setuid() return code.  Here we additionally recheck
-	 * whether NPROC limit is still exceeded.
+	 * 检查当前用户的进程数量是否超标
 	 */
 	if ((current->flags & PF_NPROC_EXCEEDED) &&
 	    is_rlimit_overlimit(current_ucounts(), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC)))
@@ -1800,6 +1833,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if (IS_ERR(bprm))
 		return PTR_ERR(bprm);
 
+	/* 检查用户参数数量上限有没有超标 */
 	retval = count(argv, MAX_ARG_STRINGS);
 	if (retval < 0)
 		return retval;
@@ -1876,15 +1910,18 @@ int kernel_execve(const char *kernel_filename,
 	if (retval < 0)
 		return retval;
 
+	/* 将文件名拷贝进来 */
 	retval = copy_string_kernel(bprm->filename, bprm);
 	if (retval < 0)
 		return retval;
 	bprm->exec = bprm->p;
 
+	/* 将环境变量拷贝进来 */
 	retval = copy_strings_kernel(bprm->envc, envp, bprm);
 	if (retval < 0)
 		return retval;
 
+	/* 将用户参数拷贝进来 */
 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
 	if (retval < 0)
 		return retval;

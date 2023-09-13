@@ -319,9 +319,9 @@ static __always_inline bool call_irq_handler(int vector, struct pt_regs *regs)
 	return true;
 }
 
-/*
- * common_interrupt() handles all normal device IRQ's (the special SMP
- * cross-CPU interrupts have their own entry points).
+/* 
+ * x86下硬中断的处理函数。从DEFINE_IDTENTRY_IRQ的宏定义可以知道，在进入硬中断之前，
+ * irq_enter函数会被调用；硬中断结束后，irq_exit会被调用（这里会进行软中断的实施）。
  */
 DEFINE_IDTENTRY_IRQ(common_interrupt)
 {

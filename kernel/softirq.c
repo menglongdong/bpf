@@ -719,6 +719,8 @@ static inline void __irq_exit_rcu(void)
 #endif
 	account_hardirq_exit(current);
 	preempt_count_sub(HARDIRQ_OFFSET);
+
+	/* 进程退出期间，如果退出后不处于中断上下文，那么检查是否需要执行软中断。 */
 	if (!in_interrupt() && local_softirq_pending())
 		invoke_softirq();
 
@@ -778,6 +780,10 @@ void raise_softirq(unsigned int nr)
 {
 	unsigned long flags;
 
+	/* 触发软中断。将软中断标志位置位，同时如果当前不是在中断上下文，那么唤醒
+	 * 软中断中断，从而使得软中断能够得到快速的处理。
+	 */
+
 	local_irq_save(flags);
 	raise_softirq_irqoff(nr);
 	local_irq_restore(flags);
@@ -813,6 +819,7 @@ static void __tasklet_schedule_common(struct tasklet_struct *t,
 	struct tasklet_head *head;
 	unsigned long flags;
 
+	/* 取出当前CPU上的tasklet_head，并将t添加到链表的尾部，然后触发软中断。 */
 	local_irq_save(flags);
 	head = this_cpu_ptr(headp);
 	t->next = NULL;
@@ -905,6 +912,9 @@ static void tasklet_action_common(struct tasklet_head *tl_head,
 {
 	struct tasklet_struct *list;
 
+	/* 
+	 * tasklet软中断的处理函数。这里设计的挺妙，相当于把链表从tl_head中取出来了。
+	 */
 	local_irq_disable();
 	list = tl_head->head;
 	tl_head->head = NULL;

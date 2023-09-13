@@ -371,6 +371,7 @@ static int kernfs_link_sibling(struct kernfs_node *kn)
 	kn_parent = kernfs_parent(kn);
 	node = &kn_parent->dir.children.rb_node;
 
+	/* 查找出要插入到的节点的父节点 */
 	while (*node) {
 		struct kernfs_node *pos;
 		int result;
@@ -386,7 +387,10 @@ static int kernfs_link_sibling(struct kernfs_node *kn)
 			return -EEXIST;
 	}
 
-	/* add new node and rebalance the tree */
+	/* 
+	 * 插入到红黑树，并进行重新平衡。可以看出，红黑树插入过程中，内核只负责
+	 * 平衡部分，具体插入到哪里需要用户自己负责。
+	 */
 	rb_link_node(&kn->rb, parent, node);
 	rb_insert_color(&kn->rb, &kn_parent->dir.children);
 
@@ -1375,6 +1379,8 @@ static struct kernfs_node *kernfs_next_descendant_post(struct kernfs_node *pos,
 {
 	struct rb_node *rbn;
 
+	/* 整个函数采用的是后序遍历，即左、右、中的顺序来获取整个cgroup树中的元素 */
+
 	lockdep_assert_held_write(&kernfs_root(root)->kernfs_rwsem);
 
 	/* if first iteration, visit leftmost descendant which may be root */
@@ -1422,6 +1428,12 @@ static void kernfs_activate_one(struct kernfs_node *kn)
  * The caller is responsible for ensuring that this function is not called
  * after kernfs_remove*() is invoked on @kn.
  */
+
+/* 
+ * 激活cgroup对应的inode。未激活状态下，这个cgroup对于用户是不可见的，这也是新创建
+ * 的cgroup的状态。
+ */
+
 void kernfs_activate(struct kernfs_node *kn)
 {
 	struct kernfs_node *pos;
@@ -1430,6 +1442,10 @@ void kernfs_activate(struct kernfs_node *kn)
 	down_write(&root->kernfs_rwsem);
 
 	pos = NULL;
+	/* 
+	 * 所有的cgroup节点采用红黑树来组织，这里从左到右、由大到小循环取出
+	 * kn中的节点，然后将其的标志加上KERNFS_ACTIVATED标志。
+	 */
 	while ((pos = kernfs_next_descendant_post(pos, kn)))
 		kernfs_activate_one(pos);
 

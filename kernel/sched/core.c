@@ -5543,11 +5543,17 @@ __setup("resched_latency_warn_ms=", setup_resched_latency_warn_ms);
  * This function gets called by the timer code, with HZ frequency.
  * We call it with interrupts disabled.
  */
+/* 
+ * 周期性调度器的中断处理函数，会按照HZ的频率被调用，处理期间会关闭中断。
+ * 这是一个标记（tick）函数，用来标记当前任务是否需要被调度。
+ */
 void sched_tick(void)
 {
 	int cpu = smp_processor_id();
+	/* 获取当前CPU上的任务运行队列。 */
 	struct rq *rq = cpu_rq(cpu);
 	/* accounting goes to the donor task */
+	/* 获取当前运行队列中正在运行的任务。 */
 	struct task_struct *donor;
 	struct rq_flags rf;
 	unsigned long hw_pressure;
@@ -5556,8 +5562,10 @@ void sched_tick(void)
 	if (housekeeping_cpu(cpu, HK_TYPE_KERNEL_NOISE))
 		arch_scale_freq_tick();
 
+	/* 更新调度的一些时钟信息。 */
 	sched_clock_tick();
 
+	/* 锁定任务队列。 */
 	rq_lock(rq, &rf);
 	donor = rq->donor;
 
@@ -5570,6 +5578,7 @@ void sched_tick(void)
 	if (dynamic_preempt_lazy() && tif_test_bit(TIF_NEED_RESCHED_LAZY))
 		resched_curr(rq);
 
+	/* 调用具体的调度器类（如CFS、FIFO等）进行标记。 */
 	donor->sched_class->task_tick(rq, donor, 0);
 	if (sched_feat(LATENCY_WARN))
 		resched_latency = cpu_resched_latency(rq);
@@ -6923,12 +6932,16 @@ keep_resched:
 
 void __noreturn do_task_dead(void)
 {
-	/* Causes final put_task_struct in finish_task_switch(): */
+	/* 更新当前进程的状态为TASK_DEAD */
 	set_special_state(TASK_DEAD);
 
 	/* Tell freezer to ignore us: */
 	current->flags |= PF_NOFREEZE;
 
+	/*
+	 * 走到这里，当前进程将不会再运行以及执行任何代码，
+	 * 因为进程不会再被调度到了，一切都结束了（莫名的伤感）。
+	 */
 	__schedule(SM_NONE);
 	BUG();
 

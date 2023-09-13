@@ -332,8 +332,19 @@ static inline unsigned long get_nr_restart_syscall(const struct pt_regs *regs)
  */
 void arch_do_signal_or_restart(struct pt_regs *regs)
 {
+	/**
+	 * 这里是信号处理的入口，在内核态返回到用户态的时候会检查当前进程是否有
+	 * 待处理的信号（exit_to_usermode_loop函数里），如果有的话就调用该函数。
+	 * 
+	 * 这个函数是体系架构相关的，这里只分析x86下的代码。
+	 */
 	struct ksignal ksig;
 
+	/* 
+	 * get_signal用于获取当前信号队列中的待处理的信号。
+	 * 
+	 * 注意：这里会进入coredump流程。
+	 */
 	if (get_signal(&ksig)) {
 		/* Whee! Actually deliver the signal.  */
 		handle_signal(&ksig, regs);

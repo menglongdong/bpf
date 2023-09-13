@@ -80,6 +80,10 @@ static inline bool execute_on_irq_stack(bool overflow, struct irq_desc *desc)
 	 * handler) we can't do that and just have to keep using the
 	 * current stack (which is the irq stack already after all)
 	 */
+	/* 
+	 * 读取当前CPU上的中断栈的地址，并与当前所处于的栈进行对比。如果相同的话，
+	 * 说明已经处于中断栈，不需要再进行处理。
+	 */
 	if (unlikely(curstk == irqstk))
 		return false;
 
@@ -149,6 +153,14 @@ void __handle_irq(struct irq_desc *desc, struct pt_regs *regs)
 {
 	bool overflow = check_stack_overflow();
 
+	/* 
+	 * 触发中断的时候，如果进程处于用户态，那么此时的内核栈是空的，
+	 * 可以直接使用这个栈，而不需要切换到中断栈。否则，切换到中断
+	 * 栈。
+	 * 
+	 * 在进入到中断的时候，x86CPU会自动将上下文由用户态（如果处于的话）
+	 * 切换到内核态，然后再进行下面的处理。
+	 */
 	if (user_mode(regs) || !execute_on_irq_stack(overflow, desc)) {
 		if (unlikely(overflow))
 			print_stack_overflow();
