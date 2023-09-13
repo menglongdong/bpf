@@ -1805,6 +1805,10 @@ static int css_populate_dir(struct cgroup_subsys_state *css)
 		return 0;
 
 	if (css_is_self(css)) {
+		/* 
+		 * 没有ss的话，说明当前是个cgroup目录。其中，cfts代表基础
+		 * 文件，即不与任何子系统绑定的文件
+		 */
 		if (cgroup_on_dfl(cgrp)) {
 			ret = cgroup_addrm_files(css, cgrp,
 						 cgroup_base_files, true);
@@ -1827,6 +1831,9 @@ static int css_populate_dir(struct cgroup_subsys_state *css)
 				return ret;
 		}
 	} else {
+		/* 
+		 * 说明这里是个子系统，为子系统创建对应的cgroup文件
+		 */
 		list_for_each_entry(cfts, &css->ss->cfts, node) {
 			ret = cgroup_addrm_files(css, cgrp, cfts, true);
 			if (ret < 0) {
@@ -5853,7 +5860,7 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	if (ret)
 		goto out_free_cgrp;
 
-	/* create the directory */
+	/* 创建cgroup目录，并将其加到父元素的rb中。 */
 	kn = kernfs_create_dir_ns(parent->kn, name, mode,
 				  current_fsuid(), current_fsgid(),
 				  cgrp, NULL);
@@ -5961,6 +5968,7 @@ out_free_cgrp:
 	return ERR_PTR(ret);
 }
 
+/* 检查层级限制，即CGroup2中的层级深度不能大于max_depth */
 static bool cgroup_check_hierarchy_limits(struct cgroup *parent)
 {
 	struct cgroup *cgroup;
@@ -6002,6 +6010,7 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 		goto out_unlock;
 	}
 
+	/* 创建cgroup实例 */
 	cgrp = cgroup_create(parent, name, mode);
 	if (IS_ERR(cgrp)) {
 		ret = PTR_ERR(cgrp);
@@ -6014,10 +6023,12 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 	 */
 	kernfs_get(cgrp->kn);
 
+	/* 为cgroup创建对应的基本控制文件 */
 	ret = css_populate_dir(&cgrp->self);
 	if (ret)
 		goto out_destroy;
 
+	/* 启用cgroup，即将cgroup中的子系统全部激活，为其创建对应的文件和目录 */
 	ret = cgroup_apply_control_enable(cgrp);
 	if (ret)
 		goto out_destroy;
@@ -7322,7 +7333,11 @@ void cgroup_sk_alloc(struct sock_cgroup_data *skcd)
 	struct cgroup *cgroup;
 
 	rcu_read_lock();
-	/* Don't associate the sock with unrelated interrupted task's cgroup. */
+	/* 给套接口设置当前进程所属于的cgroup。如果当前在中断上下文，那么会
+	 * 认为属于默认层级（v2）。否则，取当前进程所属于的cgroup。
+	 * 
+	 * 这个只对v2生效，对于v1会保持为默认层级。
+	 */
 	if (in_interrupt()) {
 		cgroup = &cgrp_dfl_root.cgrp;
 		cgroup_get(cgroup);

@@ -176,6 +176,12 @@ struct cgroup_file {
  * Fields marked with "PI:" are public and immutable and may be accessed
  * directly without synchronization.
  */
+
+/* 
+ * 这个结构体用于连接cgroup和子系统的。每个子系统的实例都是唯一的，每个cgroup下面
+ * 会为其支持的子系统创建对应的css
+ */
+
 struct cgroup_subsys_state {
 	/* PI: the cgroup that this css is attached to */
 	struct cgroup *cgroup;
