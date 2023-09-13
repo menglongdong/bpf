@@ -71,6 +71,12 @@ static netdev_tx_t loopback_xmit(struct sk_buff *skb,
 				 struct net_device *dev)
 {
 	int len;
+	/* 回环设备的发包处理函数。首先对skb进行orphan，解除其与套接口之间的关联（
+	 * 等价于报文从物理硬件发送出去了）。
+	 * 
+	 * 之后，其调用netif_rx进行处理。这个函数一般是不支持napi的网卡驱动在硬中断
+	 * 里调用的，因此会先将其放到当前CPU的backlog队列中，再在软中断中进行处理。
+	 */
 
 	skb_tx_timestamp(skb);
 

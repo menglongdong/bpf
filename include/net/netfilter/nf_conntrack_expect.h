@@ -15,6 +15,14 @@ extern unsigned int nf_ct_expect_hsize;
 extern unsigned int nf_ct_expect_max;
 extern struct hlist_head *nf_ct_expect_hash;
 
+/* 这个是用来处理关联连接的。比如对于FTP协议，其会通过一开始的端口（如21）建立连接，
+ * 然后协商一个端口B，客户端去连接服务端的这个B端口。因此在进行NAT或者IPVS的时候，
+ * 需要将这两个连接一并处理。
+ * 
+ * 这里于是引入了expect机制，对应的协议模块先注册ct_helper，该helper能够识别出来
+ * 需要进行关联的父连接，并将需要跟踪的子连接的特征放到expect哈希表中。当子链接的ct
+ * 从创建的时候，会从expect表中查找对其对应的父连接，来恢复这种对应关系。
+ */
 struct nf_conntrack_expect {
 	/* Conntrack expectation list member */
 	struct hlist_node lnode;
@@ -22,7 +30,7 @@ struct nf_conntrack_expect {
 	/* Hash member */
 	struct hlist_node hnode;
 
-	/* We expect this tuple, with the following mask */
+	/* 用来匹配关联连接的元组信息 */
 	struct nf_conntrack_tuple tuple;
 	struct nf_conntrack_tuple_mask mask;
 
@@ -42,7 +50,7 @@ struct nf_conntrack_expect {
 	/* Helper to assign to new connection */
 	struct nf_conntrack_helper *helper;
 
-	/* The conntrack of the master connection */
+	/* 这个expect对应的ct，以FTP为例，就是连接到21端口的那个ct */
 	struct nf_conn *master;
 
 	/* Timer function; deletes the expectation. */

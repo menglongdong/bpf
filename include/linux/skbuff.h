@@ -937,7 +937,12 @@ struct sk_buff {
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	unsigned long		 _nfct;
 #endif
+				/* skb报文数据（当前协议数据）总长度，会随着
+				 * skb_pull()/skb_push()操作而变动，与skb->data
+				 * 相对应
+				 */
 	unsigned int		len,
+				/* 非线性区数据的长度 */
 				data_len;
 	__u16			mac_len,
 				hdr_len;
@@ -2857,18 +2862,25 @@ pskb_may_pull_reason(struct sk_buff *skb, unsigned int len)
 	DEBUG_NET_WARN_ON_ONCE(len > INT_MAX);
 	skb_might_realloc(skb);
 
+	/* 如果len小于线性区的长度，那么不需要进行pull */
 	if (likely(len <= skb_headlen(skb)))
 		return SKB_NOT_DROPPED_YET;
 
+	/* 如果len大于报文的总长度，那么无法进行pull */
 	if (unlikely(len > skb->len))
 		return SKB_DROP_REASON_PKT_TOO_SMALL;
 
+	/* 将（len-线性区长度）的数据进行pull，即放到线性区尾部 */
 	if (unlikely(!__pskb_pull_tail(skb, len - skb_headlen(skb))))
 		return SKB_DROP_REASON_NOMEM;
 
 	return SKB_NOT_DROPPED_YET;
 }
 
+/* pull操作指的是将非线性区报文数据放到线性区，使得前面的len字节都在线性区。
+ * 在进行报文处理的时候要进行这个步骤，因为内核要解析报文头部，而非线性区的
+ * 数据无法解析。
+ */
 static inline bool pskb_may_pull(struct sk_buff *skb, unsigned int len)
 {
 	return pskb_may_pull_reason(skb, len) == SKB_NOT_DROPPED_YET;

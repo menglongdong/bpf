@@ -108,6 +108,10 @@ static DEFINE_MUTEX(tcp_exit_batch_mutex);
 static union tcp_seq_and_ts_off
 tcp_v4_init_seq_and_ts_off(const struct net *net, const struct sk_buff *skb)
 {
+	/*
+	 * 计算初始 TCP 序列号和时间戳偏移。时间戳偏移只和地址相关，因此同一对端
+	 * 之间计算出来的初始 ts 偏移通常是递增的。
+	 */
 	return secure_tcp_seq_and_ts_off(net,
 					 ip_hdr(skb)->daddr,
 					 ip_hdr(skb)->saddr,
@@ -343,6 +347,7 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len
 	if (likely(!tp->repair)) {
 		union tcp_seq_and_ts_off st;
 
+		/* 根据四元组和地址计算初始的 ISN 与时间戳偏移。 */
 		st = secure_tcp_seq_and_ts_off(net,
 					       inet->inet_saddr,
 					       inet->inet_daddr,
@@ -2282,13 +2287,23 @@ lookup:
 		}
 		refcounted = true;
 		nsk = NULL;
-			/*
-			 * 先做socket filter，再进行req校验/子sock转换与后续处理。
-			 */
-			if (!tcp_filter(sk, skb, &drop_reason)) {
-				th = (const struct tcphdr *)skb->data;
-				iph = ip_hdr(skb);
-				tcp_v4_fill_cb(skb, iph, th);
+		/*
+		 * 进行eBPF的过滤。过滤通过后，调用tcp_check_req进行合法性的
+		 * 检查，以及由request向sock的转换。
+		 * 
+		 * 在完成套接口的转换和状态的转换后，会调用tcp_child_process
+		 * 来使用当前新生成的sock对报文数据进行处理。可以看出，TCP三次
+		 * 握手过程中，最后一次握手是可以携带数据的。
+		 * 
+		 * 在转换完成后，会将该套接口插入到ehash表中，并在必要的情况下将
+		 * 该套接口放到accept队列。对于某些情况，如mptcp，会通过设置
+		 * drop_req 来阻止套接口放入到accept队列，因为mptcp对应的ops
+		 * 函数会直接把这个套接口拿来用。
+		 */
+		if (!tcp_filter(sk, skb, &drop_reason)) {
+			th = (const struct tcphdr *)skb->data;
+			iph = ip_hdr(skb);
+			tcp_v4_fill_cb(skb, iph, th);
 			nsk = tcp_check_req(sk, skb, req, false, &req_stolen,
 					    &drop_reason);
 		}
@@ -2942,8 +2957,8 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 	if (state == TCP_LISTEN)
 		rx_queue = READ_ONCE(sk->sk_ack_backlog);
 	else
-		/* Because we don't lock the socket,
-		 * we might find a transient negative value.
+		/* 收包队列中还未被接收到用户态的报文的长度：已收到的最大的
+		 * 序列号减去已经拷贝的序列号。
 		 */
 		rx_queue = max_t(int, READ_ONCE(tp->rcv_nxt) -
 				      READ_ONCE(tp->copied_seq), 0);
@@ -2951,6 +2966,7 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 	seq_printf(f, "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08lX "
 			"%08X %5u %8d %lu %d %pK %lu %lu %u %u %d",
 		i, src, srcp, dest, destp, state,
+		/* 发包队列的长度：重传队列中的数据 + 发送队列中的数据 */
 		READ_ONCE(tp->write_seq) - tp->snd_una,
 		rx_queue,
 		timer_active,

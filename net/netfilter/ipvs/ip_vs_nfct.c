@@ -73,6 +73,8 @@ ip_vs_update_conntrack(struct sk_buff *skb, struct ip_vs_conn *cp, int outin)
 	struct nf_conn *ct = nf_ct_get(skb, &ctinfo);
 	struct nf_conntrack_tuple new_tuple;
 
+	/* 在适当的时机使用conn里的信息来更新ct里的元组信息。 */
+
 	if (ct == NULL || nf_ct_is_confirmed(ct) ||
 	    nf_ct_is_dying(ct))
 		return;

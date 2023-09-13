@@ -2425,6 +2425,9 @@ static void __sk_free(struct sock *sk)
 
 void sk_free(struct sock *sk)
 {
+	/* 这个sk_free的意思是检查是否当前重传队列中的数据是否发送清空了。如果
+	 * 清空了的话，就调用 __sk_free -> sk->sk_destruct()
+	 */
 	/*
 	 * We subtract one from sk_wmem_alloc and can know if
 	 * some packets are still in some tx queue.
@@ -2673,6 +2676,7 @@ void sock_wfree(struct sk_buff *skb)
 	bool free;
 	int old;
 
+	/* 对于TCP协议，会设置 SOCK_USE_WRITE_QUEUE，因此会调用 sk_stream_write_space */
 	if (!sock_flag(sk, SOCK_USE_WRITE_QUEUE)) {
 		if (sock_flag(sk, SOCK_RCU_FREE) &&
 		    sk->sk_write_space == sock_def_write_space) {

@@ -91,6 +91,13 @@ struct ip_tunnel *ip_tunnel_lookup(struct ip_tunnel_net *itn,
 	hash = ip_tunnel_hash(key, remote);
 	head = &itn->tunnels[hash];
 
+	/* IP Tunnel设备查找顺序：
+	 * - 根据saddr/daddr匹配（精确匹配）
+	 * - 根据daddr匹配（saddr为ANY）
+	 * - 根据saddr匹配（daddr为ANY），或者报文为广播报文，且广播地址与
+	 *   daddr相同（还有这种用法？）
+	 */
+
 	hlist_for_each_entry_rcu(t, head, hash_node) {
 		if (local != t->parms.iph.saddr ||
 		    remote != t->parms.iph.daddr ||

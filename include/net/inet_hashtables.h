@@ -422,7 +422,9 @@ static inline struct sock *__inet_lookup(struct net *net,
 	u16 hnum = ntohs(dport);
 	struct sock *sk;
 
-	/* 对于已建链sock，直接在established哈希中进行精确匹配。 */
+	/* 对于已建链sock，直接在established哈希中进行精确匹配。
+	 * 除五元组外，还会匹配收包网口等上下文信息。
+	 */
 	sk = __inet_lookup_established(net, saddr, sport,
 				       daddr, hnum, dif, sdif);
 	*refcounted = true;

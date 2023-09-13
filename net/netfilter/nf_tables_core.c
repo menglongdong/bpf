@@ -273,6 +273,9 @@ do_chain:
 next_rule:
 	regs.verdict.code = NFT_CONTINUE;
 	for (; !rule->is_last ; rule = nft_rule_next(rule)) {
+		/* 遍历所有的规则，以及每个规则上表达式（一个规则由多个表达式）
+		 * 构成。
+		 */
 		nft_rule_dp_for_each_expr(expr, last, rule) {
 			if (expr->ops == &nft_cmp_fast_ops)
 				nft_cmp_fast_eval(expr, &regs);

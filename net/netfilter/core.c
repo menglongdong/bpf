@@ -107,6 +107,11 @@ nf_hook_entries_grow(const struct nf_hook_entries *old,
 	struct nf_hook_entries *new;
 	bool inserted = false;
 
+	/* 将新的ops添加到对应的链表中。首先根据ops数量分配一块新的内存，
+	 * 然后按照优先级将新的ops插入到链表（数组）中，优先级按照数值
+	 * 从小到大的顺序排列。
+	 */
+
 	alloc_entries = 1;
 	old_entries = old ? old->num_hook_entries : 0;
 
@@ -422,6 +427,8 @@ static int __nf_register_net_hook(struct net *net, int pf,
 		break;
 	}
 
+	/* 根据网络命名空间、协议族和HOOK点，从net->nf找到对应的entries */
+
 	pp = nf_hook_entry_head(net, pf, reg->hooknum, reg->dev);
 	if (!pp)
 		return -EINVAL;
@@ -587,6 +594,8 @@ int nf_register_net_hooks(struct net *net, const struct nf_hook_ops *reg,
 	unsigned int i;
 	int err = 0;
 
+	/* 对n个ops进行注册。 */
+
 	for (i = 0; i < n; i++) {
 		err = nf_register_net_hook(net, &reg[i]);
 		if (err)
@@ -611,8 +620,11 @@ void nf_unregister_net_hooks(struct net *net, const struct nf_hook_ops *reg,
 }
 EXPORT_SYMBOL(nf_unregister_net_hooks);
 
-/* Returns 1 if okfn() needs to be executed by the caller,
- * -EPERM for NF_DROP, 0 otherwise.  Caller must hold rcu_read_lock. */
+
+/* 执行特定协议族的特定HOOK点上的所有注册的钩子函数，并根据返回值做相应的处理。
+ * 该函数如果返回1，代表okfn应该被执行；否则，不执行。
+ */
+
 int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state,
 		 const struct nf_hook_entries *e, unsigned int s)
 {

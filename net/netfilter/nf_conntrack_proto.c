@@ -226,8 +226,10 @@ static unsigned int ipv4_conntrack_local(void *priv,
 	return nf_conntrack_in(skb, state);
 }
 
-/* Connection tracking may drop packets, but never alters them, so
- * make it the first hook.
+/* 下面的1、2两个ops是用于conntrack记录的创建（没有放到哈希表里），
+ * 后两个ops是在报文修改完成后进行conntrack的哈希，并使其生效。
+ * 这样，即使NAT报文内容被修改了，仍然可以通过新的报文来找到这个
+ * conntrack记录。
  */
 static const struct nf_hook_ops ipv4_conntrack_ops[] = {
 	{

@@ -455,6 +455,10 @@ void tcp_openreq_init_rwin(struct request_sock *req,
 	else if (full_space < rcv_wnd * mss)
 		full_space = rcv_wnd * mss;
 
+	/* 进行TCP窗口缩放因子的计算。其中，rsk_window_clamp代表窗口大小上限，对于
+	 * lo来说会设置为最大值（无上限）。
+	 */
+
 	/* tcp_full_space because it is guaranteed to be the first packet */
 	tcp_select_initial_window(sk_listener, full_space,
 		mss - (ireq->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0),
@@ -547,6 +551,13 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 				      struct request_sock *req,
 				      struct sk_buff *skb)
 {
+	/* 这个函数用于将req套接口转为tcp套接口。注意这里的inet_csk_clone_lock，
+	 * 它不仅会进行sk的拷贝，还会进行ulp的拷贝，即调用：
+	 * 	inet_clone_ulp → subflow_ulp_clone
+	 * 
+	 * 因此，如果sk（listen套接口）是mptcp的backend套接口，那么创建出来的套接口
+	 * 也会是backend的套接口，具有subflow_context。
+	 */
 	struct sock *newsk = inet_csk_clone_lock(sk, req, GFP_ATOMIC);
 	const struct inet_request_sock *ireq = inet_rsk(req);
 	struct tcp_request_sock *treq = tcp_rsk(req);

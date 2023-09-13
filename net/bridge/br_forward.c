@@ -146,6 +146,11 @@ void br_forward(const struct net_bridge_port *to,
 {
 	if (unlikely(!to))
 		goto out;
+	
+	/* 进行报文的转发。转发过程中，会将报文的网口设备设置成目标网口，并
+	 * 调用dev_queue_xmit()。这里可以看出，即使是接在网桥上的设备也可以
+	 * 拥有TC队列，也可以做限流。
+	 */
 
 	/* redirect to backup link if the destination port is down */
 	if (rcu_access_pointer(to->backup_port) &&

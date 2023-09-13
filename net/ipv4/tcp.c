@@ -741,6 +741,12 @@ static inline void tcp_mark_urg(struct tcp_sock *tp, int flags)
 static bool tcp_should_autocork(struct sock *sk, struct sk_buff *skb,
 				int size_goal)
 {
+	/* 检查是否需要自动并包。如果当前的skb里面还可以继续存放报文，并且当前
+	 * Qdisc里存在属于当前套接口的报文，那么这里就不需要发送。因为当Qdisc里
+	 * 的报文发送出去后，会重新检查当前丢列中是否需要进行报文发送。
+	 * 
+	 * 这个过程是不需要依赖定时器的，可以自动完成。
+	 */
 	return skb->len < size_goal &&
 	       READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_autocorking) &&
 	       !tcp_rtx_queue_empty(sk) &&
@@ -1286,6 +1292,9 @@ restart:
 			 * process_backlog用于处理backlog中的队列，这里是为了
 			 * 减少锁的竞争，因为此时已经持锁了，所以在这期间处理backlog
 			 * 中的报文更加合理。
+			 * 
+			 * 这里会先检查当前套接口的发送队列是否满了，满了的话就会进入
+			 * 到睡眠等待内存可用。
 			 */
 new_segment:
 			if (!sk_stream_memory_free(sk))
@@ -1303,6 +1312,9 @@ new_segment:
 			 * 
 			 * 如果是第一个报文，那么会放宽内存限制，强制使其发送一个
 			 * 出去。
+			 * 
+			 * 这里分配出来的skb的data指向了TCP报文的内容，即跳过了
+			 * TCP头部的那段内存。
 			 */
 			skb = tcp_stream_alloc_skb(sk, sk->sk_allocation,
 						   first_skb);
@@ -1314,6 +1326,12 @@ new_segment:
 #ifdef CONFIG_SKB_DECRYPTED
 			skb->decrypted = !!(flags & MSG_SENDPAGE_DECRYPTED);
 #endif
+			/* 初始化报文的序列号（没有设置到报文上），并将报文加入到发送
+			 * 队列尾部。
+			 * 
+			 * 这里会初始化tcp_skb_cb，所以在TCP报文的最初阶段，报文
+			 * 的cb就已经被初始化好了，可以使用了。
+			 */
 			tcp_skb_entail(sk, skb);
 			copy = size_goal;
 
@@ -3297,7 +3315,7 @@ void __tcp_close(struct sock *sk, long timeout)
 	} else if (data_was_unread) {
 		/*
 		 * 存在未接收的报文被释放了，这种情况下进行连接的RST，快速释放。
-		 * 这个也是RFC规范中制定的。
+		 * 这个也是RFC规范中制定的，作为异常场景进行连接关闭。
 		 */
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONCLOSE);
 		tcp_set_state(sk, TCP_CLOSE);
@@ -3309,6 +3327,7 @@ void __tcp_close(struct sock *sk, long timeout)
 		 * 而是调用tcp_disconnect直接使用RST断开连接。
 		 *
 		 * SOCK_LINGER为以阻塞的方式断开连接，sk_lingertime为等待超时时间。
+		 * sk->sk_lingertime为0代表立刻释放TCP连接。
 		 */
 		sk->sk_prot->disconnect(sk, 0);
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONDATA);
@@ -3481,6 +3500,8 @@ int tcp_disconnect(struct sock *sk, int flags)
 	int old_state = sk->sk_state;
 	struct request_sock *req;
 	u32 seq;
+
+	/* 异常TCP套接口关闭，即采用RESET的方式来进行关闭和资源释放，不进行四次挥手。 */
 
 	if (old_state != TCP_CLOSE)
 		tcp_set_state(sk, TCP_CLOSE);

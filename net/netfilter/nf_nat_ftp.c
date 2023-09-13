@@ -27,6 +27,9 @@ MODULE_ALIAS_NF_NAT_HELPER(NAT_HELPER_NAME);
 
 /* FIXME: Time out? --RR */
 
+/* 这里的 nat_helper_ftp 主要用于openvswitch模块来获取当前模块的引用的。
+ * 这个文件里面唯一有用的一个函数就是 nf_nat_ftp ，在ct初始化阶段会被调用。
+ */
 static struct nf_conntrack_nat_helper nat_helper_ftp =
 	NF_CT_NAT_HELPER_INIT(NAT_HELPER_NAME);
 

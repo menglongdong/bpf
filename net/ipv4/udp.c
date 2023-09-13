@@ -1670,6 +1670,10 @@ static void udp_rmem_release(struct sock *sk, unsigned int size,
 	struct sk_buff_head *sk_queue;
 	unsigned int amt;
 
+	/* 在释放玩接收队列里的报文后，调用这个函数来回收套接口上统计的内存信息。
+	 * 这里的size参数是已经释放的skb占用的内存。
+	 */
+
 	if (likely(partial)) {
 		up->forward_deficit += size;
 		size = up->forward_deficit;
@@ -1689,11 +1693,13 @@ static void udp_rmem_release(struct sock *sk, unsigned int size,
 		spin_lock(&sk_queue->lock);
 
 	amt = (size + sk->sk_forward_alloc - partial) & ~(PAGE_SIZE - 1);
+	/* 将释放的内存归还到sk_forward_alloc上面 */
 	sk_forward_alloc_add(sk, size - amt);
 
 	if (amt)
 		__sk_mem_reduce_allocated(sk, amt >> PAGE_SHIFT);
 
+	/* 对已经分配的内存进行释放 */
 	atomic_sub(size, &sk->sk_rmem_alloc);
 
 	/* this can save us from acquiring the rx queue lock on next receive */
@@ -1875,6 +1881,7 @@ void udp_destruct_common(struct sock *sk)
 	unsigned int total = 0;
 	struct sk_buff *skb;
 
+	/* 取出接收队列中的数据，并对其进行释放（丢弃）。为什么呢？ */
 	skb_queue_splice_tail_init(&sk->sk_receive_queue, &up->reader_queue);
 	while ((skb = __skb_dequeue(&up->reader_queue)) != NULL) {
 		total += skb->truesize;

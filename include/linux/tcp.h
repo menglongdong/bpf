@@ -245,6 +245,7 @@ struct tcp_sock {
 
 	/* RX read-mostly hotpath cache lines */
 	__cacheline_group_begin(tcp_sock_read_rx);
+	/* 已经拷贝到用户态的最后一个序列号 */
 	u32	copied_seq;	/* Head of yet unread data */
 	u32	snd_wl1;	/* Sequence for window update		*/
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
@@ -273,6 +274,7 @@ struct tcp_sock {
 	u32	snd_sml;	/* Last byte of the most recently transmitted small packet */
 	u32	chrono_start;	/* Start time in jiffies of a TCP chrono */
 	u32	chrono_stat[3];	/* Time in jiffies for chrono_stat stats */
+	/* 要设置到下一个存放到发送队列的报文的序列号 */
 	u32	write_seq;	/* Tail(+1) of data held in tcp send buffer */
 	u32	pushed_seq;	/* Last pushed seq, required to talk to windows */
 	u32	lsndtime;	/* timestamp of last sent data packet (for restart window) */

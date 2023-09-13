@@ -184,13 +184,25 @@ void nf_nat_follow_master(struct nf_conn *ct,
 	/* This must be a fresh one. */
 	BUG_ON(ct->status & IPS_NAT_DONE_MASK);
 
-	/* Change src to where master sends to */
+	/* 对于SNAT，这里会把报文的源地址选择为master上的源地址。这里端口没有做限制，
+	 * 因此端口会按照原来的方式来进行选取。
+	 *
+	 * 可以看出来，这种模式并不适合mptcp，因为mptcp并不是主从模式，其各个子流
+	 * 之间是平等的。对于mptcp，这里需要一些额外的操作（还没想好怎么做）。
+	 * 因为各个子流之间是没有什么关系的，地址和端口可能完全没有关系，只能通过
+	 * token来进行识别。那么在进行NAT的时候，如何保证链路的一致性呢？
+	 * 
+	 * subflow的方式还好办，因为目的地址和端口没有变，进行NAT的时候可以采用之前
+	 * 的信息；sign模式呢？头疼。。。
+	 */
 	range.flags = NF_NAT_RANGE_MAP_IPS;
 	range.min_addr = range.max_addr
 		= ct->master->tuplehash[!exp->dir].tuple.dst.u3;
 	nf_nat_setup_info(ct, &range, NF_NAT_MANIP_SRC);
 
-	/* For DST manip, map port here to where it's expected. */
+	/* 对于DNAT，这里会将目的地址直接选为master上的目的地址，同时将目的端口选择
+	 * 为保存下来的端口。
+	 */
 	range.flags = (NF_NAT_RANGE_MAP_IPS | NF_NAT_RANGE_PROTO_SPECIFIED);
 	range.min_proto = range.max_proto = exp->saved_proto;
 	range.min_addr = range.max_addr

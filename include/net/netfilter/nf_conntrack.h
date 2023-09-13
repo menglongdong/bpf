@@ -91,13 +91,27 @@ struct nf_conn {
 #ifdef CONFIG_NF_CONNTRACK_ZONES
 	struct nf_conntrack_zone zone;
 #endif
-	/* XXX should I move this to the tail ? - Y.K */
-	/* These are my tuples; original and reply */
+	/* 这个可以说是conntrack里最重要是一个字段了，他是一个数组，长度为2，
+	 * 类型为struct nf_conntrack_tuple_hash。
+	 * 
+	 * struct nf_conntrack_tuple_hash是用来表示一个连接的，例如本机A
+	 * 向服务器B建立了一条TCP连接，那么这个数组中的第一个元素的代表着
+	 * A -> B的连接，tuplehash[0].src存储了A的地址和端口，tuplehash[0].dst
+	 * 存储了B的地址和端口。
+	 * 
+	 * 由于conntrack跟踪的是双向连接，因此tuplehash[1]存储的是这个连接
+	 * 中B -> A的连接，即tuplehash[1].src存储了B的地址和端口，
+	 * tuplehash[1].dst存储了B的地址和端口。
+	 * 
+	 * 需要注意的是，如果报文是经过SNAT或者DNAT的话，那么tuplehash[0]
+	 * 与tuplehash[1]就会不一致，此时这两个连接不会再是互为逆方向了。
+	 */
 	struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
 
-	/* Have we seen traffic both ways yet? (bitset) */
+	/* 当前ct的状态标志，包括是否confirm、是否收到过响应包等。 */
 	unsigned long status;
 
+	/* 所属于的网络命名空间。 */
 	possible_net_t ct_net;
 
 #if IS_ENABLED(CONFIG_NF_NAT)
@@ -120,7 +134,9 @@ struct nf_conn {
 	/* Extensions */
 	struct nf_ct_ext *ext;
 
-	/* Storage reserved for other modules, must be the last member */
+	/* 
+	 * 协议相关的内容，比如TCP的窗口信息等。
+	 */
 	union nf_conntrack_proto proto;
 };
 

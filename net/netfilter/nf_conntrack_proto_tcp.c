@@ -627,6 +627,14 @@ tcp_in_window(struct nf_conn *ct, enum ip_conntrack_dir dir,
 	 *   也就是说， ack号要小于对端发送的最后一个字节（即不能ack对方还没有
 	 *   发送的数据，这是合理的），同时要大于本端收包窗口的左边界，即不能
 	 *   ack已经被ack过的报文。
+	 * 
+	 * 其中：
+	 * - td_end: 发送出去的最后一个字节，即当前已经发送出去的最大序列号。
+	 *   每次发送数据的时候都会更新sender->td_end
+	 * - td_maxend: 允许发送的最大的报文序列号，即对方的收包窗口的上限值。
+	 *   这个是根据收到的ack号+window来确定的，每次发送数据都会更新接收
+	 *   方的这个字段，其本质为：最后一个被确认的数据（当前发送窗口内的第
+	 *   一个数据）+对方的window大小。
 	 */
 
 	seq_ok = before(seq, sender->td_maxend + 1);
@@ -1007,6 +1015,7 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 	spin_lock_bh(&ct->lock);
 	old_state = ct->proto.tcp.state;
 	dir = CTINFO2DIR(ctinfo);
+	/* 通过tcp报文的flags，获取报文（连接）的状态 */
 	index = get_conntrack_index(th);
 	new_state = tcp_conntracks[dir][index][old_state];
 

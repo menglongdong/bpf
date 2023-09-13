@@ -264,6 +264,9 @@ __ip_vs_conn_in_get(const struct ip_vs_conn_param *p)
 	unsigned int hash;
 	struct ip_vs_conn *cp;
 
+	/* 根据地址、端口和协议三元组来进行HASH计算，然后从ip_vs_conn_tab表中
+	 * 找到连接与当前报文精确匹配的connect（怎么感觉和ct没啥关系？）。
+	 */
 	hash = ip_vs_conn_hashkey_param(p, false);
 
 	rcu_read_lock();
@@ -1020,6 +1023,9 @@ ip_vs_conn_new(const struct ip_vs_conn_param *p, int dest_af,
 #endif
 		ip_vs_bind_xmit(cp);
 
+	/* 根据当前cp上的目的地址等信息，调用当前协议的钩子函数来进行app的查找。在
+	 * 查找到对应的app后，调用对应app->init_conn函数进行连接的初始化。
+	 */
 	if (unlikely(pd && atomic_read(&pd->appcnt)))
 		ip_vs_bind_app(cp, pd->pp);
 
@@ -1030,6 +1036,9 @@ ip_vs_conn_new(const struct ip_vs_conn_param *p, int dest_af,
 	 * IP_VS_CONN_F_ONE_PACKET too.
 	 */
 
+	/* 如果当前启用了ipvs对ct的支持，那么给他加上这个标志，代表使用ct。对于ftp，
+	 * 在匹配到app的时候也会给他加上这个标志。
+	 */
 	if (ip_vs_conntrack_enabled(ipvs))
 		cp->flags |= IP_VS_CONN_F_NFCT;
 

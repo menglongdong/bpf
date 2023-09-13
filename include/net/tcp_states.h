@@ -21,6 +21,9 @@ enum {
 	TCP_LAST_ACK,
 	TCP_LISTEN,
 	TCP_CLOSING,	/* Now a valid state */
+	/* req类型的套接口的状态，用于区分套接口类型（是完整的套接口还是req
+	 * 类型的）。
+	 */
 	TCP_NEW_SYN_RECV,
 	TCP_BOUND_INACTIVE, /* Pseudo-state for inet_diag */
 

@@ -66,7 +66,7 @@ struct nf_conntrack_helper {
 /* Must be kept in sync with the classes defined by helpers */
 #define NF_CT_MAX_EXPECT_CLASSES	4
 
-/* nf_conn feature for connections that have a helper */
+/* 用来关联ct、expect和ct_helper的，每个ct上会有与其关联的help */
 struct nf_conn_help {
 	/* Helper. if any */
 	struct nf_conntrack_helper __rcu *helper;

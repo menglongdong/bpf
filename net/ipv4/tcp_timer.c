@@ -392,6 +392,14 @@ static void tcp_probe_timer(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	int max_probes;
 
+	/* 零窗口探测定时器的超时重传函数。如果发送队列中没有数据，那么不会进行超时
+	 * 重传。看样子，probe报文的丢包重传和probe重试都是在这个函数处理的？
+	 * 
+	 * 收到ack报文后，icsk_probes_out会被重置为0。在收到ack后，这里会进行
+	 * probe的重试，重新计算一个超时时间，在超时后重新发送新的probe报文。
+	 * 如果发生了丢包，那么在重传超过sysctl_tcp_retries2后就会断链。
+	 */
+
 	if (tp->packets_out || !skb) {
 		WRITE_ONCE(icsk->icsk_probes_out, 0);
 		icsk->icsk_probes_tstamp = 0;

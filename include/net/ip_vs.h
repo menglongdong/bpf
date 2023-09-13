@@ -559,7 +559,8 @@ struct ip_vs_conn_param {
 	__u8				pe_data_len;
 };
 
-/* IP_VS structure allocated for each dynamically scheduled connection */
+/* 用于表示IPVS（动态）连接上下文的结构体，在IPVS中起到核心作用。
+ */
 struct ip_vs_conn {
 	struct hlist_node	c_list;         /* hashed list heads */
 	/* Protocol, addresses and port numbers */

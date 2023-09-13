@@ -1113,6 +1113,7 @@ static void skb_release_data(struct sk_buff *skb, enum skb_drop_reason reason)
 	if (skb_zcopy(skb)) {
 		bool skip_unref = shinfo->flags & SKBFL_MANAGED_FRAG_REFS;
 
+		/* 清理零拷贝相关的内容 */
 		skb_zcopy_clear(skb, true);
 		if (skip_unref)
 			goto free_head;
@@ -1175,6 +1176,13 @@ fastpath:
 void skb_release_head_state(struct sk_buff *skb)
 {
 	skb_dst_drop(skb);
+
+	/* 调用当前skb上的钩子函数，比如：
+	 * - sock_wfree
+	 * - tcp_wfree
+	 *
+	 * 对于非纯ACK的TCP报文，钩子函数为tcp_wfree
+	 */
 	if (skb->destructor) {
 		DEBUG_NET_WARN_ON_ONCE(in_hardirq());
 #ifdef CONFIG_INET
@@ -2303,6 +2311,10 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	u8 *data;
 	int i;
 
+	/* 重新分配线性区的数据。这里主要用作解除skb克隆的场景，会解除skb线性区
+	 * 的共享（由于线性区会被修改等原因）。
+	 */
+
 	BUG_ON(nhead < 0);
 
 	BUG_ON(skb_shared(skb));
@@ -2883,6 +2895,7 @@ void *__pskb_pull_tail(struct sk_buff *skb, int delta)
 			return NULL;
 	}
 
+	/* 进行数据的拷贝，把非线性区的delta长度的报文拷贝到线性区尾部。 */
 	BUG_ON(skb_copy_bits(skb, skb_headlen(skb),
 			     skb_tail_pointer(skb), delta));
 
@@ -2913,6 +2926,8 @@ void *__pskb_pull_tail(struct sk_buff *skb, int delta)
 		struct sk_buff *list = skb_shinfo(skb)->frag_list;
 		struct sk_buff *clone = NULL;
 		struct sk_buff *insp = NULL;
+
+		/* 遍历非线性区，把已经拷贝了的非线性区的skb给释放掉。 */
 
 		do {
 			if (list->len <= eat) {

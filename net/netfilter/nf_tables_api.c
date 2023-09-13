@@ -1048,6 +1048,11 @@ static inline u64 nf_tables_alloc_handle(struct nft_table *table)
 	return ++table->hgenerator;
 }
 
+/* 按照协议族、表类型以二维数组的方式把nft_chain_type组织起来。
+ * 其中，每个nft_chain_type对应一个协议族的一个表。
+ *
+ * NFT_CHAIN_T_MAX代表一个协议族表的最大数量，比如FILTER、NAT等。
+ */
 static const struct nft_chain_type *chain_type[NFPROTO_NUMPROTO][NFT_CHAIN_T_MAX];
 
 static const struct nft_chain_type *
@@ -2457,8 +2462,11 @@ err_hook:
 	return err;
 }
 
+/* 该结构体用于链的添加、删除等操作。 */
 struct nft_chain_hook {
+	/* HOOK点 */
 	u32				num;
+	/* 优先级 */
 	s32				priority;
 	const struct nft_chain_type	*type;
 	struct list_head		list;
@@ -2505,6 +2513,10 @@ static int nft_chain_parse_hook(struct net *net,
 	const struct nft_chain_type *type;
 	int err;
 
+	/* 从netlink里提供的信息来初始化hook，包括找到对应的chain_type、
+	 * 初始化HOOK的num、优先级等。
+	 */
+
 	lockdep_assert_held(&nft_net->commit_mutex);
 	lockdep_nfnl_nft_mutex_not_held();
 
@@ -2528,6 +2540,9 @@ static int nft_chain_parse_hook(struct net *net,
 		if (!type)
 			return -EOPNOTSUPP;
 
+		/* chain_type的获取。如果没有指定chain type，那么使用default作为
+		 * chain_type。
+		 */
 		if (nla[NFTA_CHAIN_TYPE]) {
 			type = nf_tables_chain_type_lookup(net, nla[NFTA_CHAIN_TYPE],
 							   family, true);
@@ -2539,6 +2554,9 @@ static int nft_chain_parse_hook(struct net *net,
 		if (hook->num >= NFT_MAX_HOOKS || !(type->hook_mask & (1 << hook->num)))
 			return -EOPNOTSUPP;
 
+		/* NAT的优先级要在CONNTRACK之后，因为CONNTRACK要先进行连接跟踪，
+		 * nftable才能进行NAT转发。
+		 */
 		if (type->type == NFT_CHAIN_T_NAT &&
 		    hook->priority <= NF_IP_PRI_CONNTRACK)
 			return -EOPNOTSUPP;
@@ -2651,6 +2669,10 @@ static int nft_basechain_init(struct nft_base_chain *basechain, u8 family,
 	struct nf_hook_ops *ops;
 	struct nft_hook *h;
 
+	/* 初始化bashchain，包括使用hook里的优先级、HOOK点来初始化
+	 * bashchain->ops，使用type里的hook_fn来初始化钩子函数。
+	 */
+
 	basechain->type = hook->type;
 	INIT_LIST_HEAD(&basechain->hook_list);
 	chain = &basechain->chain;
@@ -2716,11 +2738,19 @@ static int nf_tables_addchain(struct nft_ctx *ctx, u8 family, u8 policy,
 		if (flags & NFT_CHAIN_BINDING)
 			return -EOPNOTSUPP;
 
+		/* 从netlink中提取注册钩子函数所需要的信息，包括当前链的类型
+		 * 优先级、hooknum等，并存放到nft_chain_hook结构体中。
+		 */
 		err = nft_chain_parse_hook(net, NULL, nla, &hook, family, flags,
 					   extack);
 		if (err < 0)
 			return err;
 
+		/* 链在内核中采用 nft_chain 结构体表示。该结构体主要保存了链与表、
+		 * 规则之间的内容和关系。每个 nft_chain 都内嵌在 nft_base_chain
+		 * 结构体中，后者还保存了链与 netfilter 的关联内容，比如注册到
+		 * netfilter 中的 nf_hook_ops 和链类型等。
+		 */
 		basechain = kzalloc_obj(*basechain, GFP_KERNEL_ACCOUNT);
 		if (basechain == NULL) {
 			nft_chain_release_hook(&hook);
@@ -2738,6 +2768,9 @@ static int nf_tables_addchain(struct nft_ctx *ctx, u8 family, u8 policy,
 			rcu_assign_pointer(basechain->stats, stats);
 		}
 
+		/* 初始化bashchain，包括使用hook里的优先级、HOOK点来初始化
+		 * bashchain->ops，使用type里的hook_fn来初始化钩子函数。
+		 */
 		err = nft_basechain_init(basechain, family, &hook, flags);
 		if (err < 0) {
 			nft_chain_release_hook(&hook);
@@ -2815,11 +2848,17 @@ static int nf_tables_addchain(struct nft_ctx *ctx, u8 family, u8 policy,
 	if (nft_is_base_chain(chain))
 		nft_trans_chain_policy(trans) = policy;
 
+	/* 将链添加到table中。 */
 	err = nft_chain_add(table, chain);
 	if (err < 0)
 		goto err_chain_add;
 
 	/* This must be LAST to ensure no packets are walking over this chain. */
+	/* 将ops注册到netfilter。对于非NAT类型的链，这里会调用
+	 * nf_register_net_hook()来直接将basechain->ops进行注册；
+	 * 对于NAT类型的链，会调用chain_type里的注册方法进行注册。
+	 * 以ipv4为例，这里会调用nf_nat_ipv4_register_fn()进行注册。
+	 */
 	err = nf_tables_register_hook(net, table, chain);
 	if (err < 0)
 		goto err_register_hook;
@@ -3152,6 +3191,9 @@ static int nf_tables_newchain(struct sk_buff *skb, const struct nfnl_info *info,
 					  extack);
 	}
 
+	/* 从nf表中查找对应的链，如果没有找到那就调用nf_tables_addchain进行
+	 * 链的添加。
+	 */
 	return nf_tables_addchain(&ctx, family, policy, flags, extack);
 }
 

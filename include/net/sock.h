@@ -490,6 +490,11 @@ struct sock {
 	 * 表示提交发送的skb所占用的内存。注意，这里指的是已经进行发送的报文，
 	 * 而不是发送队列里的报文，因此，对于TCP而言，这里统计的是rtx队列里的
 	 * 报文所占用的内存。
+	 * 
+	 * 注意：这个属性的初始值为1，当这个属性的值变成0的时候，就说明这个套接口
+	 * 里面的数据已经被清空了，可以被释放了。套接口释放的调用链为：
+	 *   sock_put -> sk_free -> __sk_destruct
+	 * 可见，sk->sk_destruct是在套接口被释放的时候的回调函数。
 	 */
 	refcount_t		sk_wmem_alloc;
 	unsigned long		sk_tsq_flags;
@@ -594,6 +599,7 @@ struct sock {
 	void			(*sk_error_report)(struct sock *sk);
 	int			(*sk_backlog_rcv)(struct sock *sk,
 						  struct sk_buff *skb);
+	/* 套接口被释放的时候的回调函数。 */
 	void                    (*sk_destruct)(struct sock *sk);
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 #ifdef CONFIG_BPF_SYSCALL

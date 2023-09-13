@@ -33,7 +33,10 @@
  */
 #define MAX_INET_PROTOS		256
 
-/* This is used to register protocols. */
+/* 四层协议处理的钩子函数结构体。IP层在收到报文后，会根据报文的协议号找到这个对应的
+ * 结构体，然后调用 handler 函数来进行报文的传递。以TCP为例，这里的handler为
+ * tcp_v4_rcv
+ */
 struct net_protocol {
 	int			(*handler)(struct sk_buff *skb);
 

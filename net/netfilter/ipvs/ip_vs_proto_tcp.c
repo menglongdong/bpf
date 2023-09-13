@@ -647,6 +647,10 @@ tcp_app_conn_bind(struct ip_vs_conn *cp)
 	struct ip_vs_app *inc;
 	int result = 0;
 
+	/* 这个函数在conn刚创建的时候会被调用，用来查找对应的app，并调用其钩子函数
+	 * 来初始化当前连接。
+	 */
+
 	/* Default binding: bind app only for NAT */
 	if (IP_VS_FWD_METHOD(cp) != IP_VS_CONN_F_MASQ)
 		return 0;

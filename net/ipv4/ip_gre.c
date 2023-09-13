@@ -371,6 +371,7 @@ static int __ipgre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 	struct ip_tunnel *tunnel;
 
 	iph = ip_hdr(skb);
+	/* 查找当前网络命名空间中的当前收包网口上的ip_tunnel设备 */
 	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, tpi->flags,
 				  iph->saddr, iph->daddr, tpi->key);
 
@@ -384,9 +385,11 @@ static int __ipgre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 		/* Special case for ipgre_header_parse(), which expects the
 		 * mac_header to point to the outer IP header.
 		 */
+		/* 让二层头部指向三层数据区 */
 		if (tunnel->dev->header_ops == &ipgre_header_ops)
 			skb_pop_mac_header(skb);
 		else
+			/* 将当前数据设置为二层头部 */
 			skb_reset_mac_header(skb);
 
 		tnl_params = &tunnel->parms.iph;
@@ -399,6 +402,7 @@ static int __ipgre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 			ip_tunnel_flags_and(flags, tpi->flags, flags);
 
 			tun_id = key32_to_tunnel_id(tpi->key);
+			/* 如果GRE设备没有指定远端，那么分配一个tun路由缓存？ */
 			tun_dst = ip_tun_rx_dst(skb, flags, tun_id, 0);
 			if (!tun_dst)
 				return PACKET_REJECT;
@@ -418,6 +422,9 @@ static int ipgre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 		     int hdr_len)
 {
 	struct net *net = dev_net(skb->dev);
+	/* IP隧道相关的网络命名空间参数，包括当前网络命名空间下的所有ip_tunnel
+	 * 设备
+	 */
 	struct ip_tunnel_net *itn;
 	int res;
 
@@ -427,6 +434,7 @@ static int ipgre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 		itn = net_generic(net, ipgre_net_id);
 
 	res = __ipgre_rcv(skb, tpi, itn, hdr_len, false);
+	/* 如果当前是TEB协议并且处理失败，那么尝试使用GRE再次处理。 */
 	if (res == PACKET_NEXT && tpi->proto == htons(ETH_P_TEB)) {
 		/* ipgre tunnels in collect metadata mode should receive
 		 * also ETH_P_TEB traffic.
@@ -445,12 +453,15 @@ static int gre_rcv(struct sk_buff *skb)
 
 #ifdef CONFIG_NET_IPGRE_BROADCAST
 	if (ipv4_is_multicast(ip_hdr(skb)->daddr)) {
-		/* Looped back packet, drop it! */
+		/* 这里说明广播报文本来是发送的，通过loopback设备又转向
+		 * 了接收。这里不再处理，不然会产生循环。
+		 */
 		if (rt_is_output_route(skb_rtable(skb)))
 			goto drop;
 	}
 #endif
 
+	/* 解析GRE头部。 */
 	hdr_len = gre_parse_header(skb, &tpi, &csum_err, htons(ETH_P_IP), 0);
 	if (hdr_len < 0)
 		goto drop;

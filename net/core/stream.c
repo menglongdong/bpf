@@ -41,6 +41,7 @@ void sk_stream_write_space(struct sock *sk)
 
 		rcu_read_lock();
 		wq = rcu_dereference(sk->sk_wq);
+		/* 释放了空间，唤醒当前套接口上所有的等待者 */
 		if (skwq_has_sleeper(wq))
 			wake_up_interruptible_poll(&wq->wait, EPOLLOUT |
 						EPOLLWRNORM | EPOLLWRBAND);

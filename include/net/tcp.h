@@ -1520,7 +1520,7 @@ static inline __u32 tcp_max_tso_deferred_mss(const struct tcp_sock *tp)
 	return 3;
 }
 
-/* Returns end sequence number of the receiver's advertised window */
+/* 返回接收方的接收窗口右边界 */
 static inline u32 tcp_wnd_end(const struct tcp_sock *tp)
 {
 	return tp->snd_una + tp->snd_wnd;
@@ -1618,6 +1618,9 @@ static inline unsigned long tcp_probe0_when(const struct sock *sk,
 
 static inline void tcp_check_probe_timer(struct sock *sk)
 {
+	/* 如果当前套接口上没有未被确认的数据，并且当前没有任何定时器，那么启动
+	 * 零窗口探测定时器。
+	 */
 	if (!tcp_sk(sk)->packets_out && !inet_csk(sk)->icsk_pending)
 		tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0,
 				     tcp_probe0_base(sk), true);

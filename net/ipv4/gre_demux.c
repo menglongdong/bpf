@@ -149,6 +149,9 @@ static int gre_rcv(struct sk_buff *skb)
 	u8 ver;
 	int ret;
 
+	/* GRE作为四层协议的收包处理函数。这个函数的实现很简单，会直接取出当前
+	 * 报文中的GRE版本，然后调用对应版本的handler函数进行处理。
+	 */
 	if (!pskb_may_pull(skb, 12))
 		goto drop;
 

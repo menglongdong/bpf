@@ -1984,13 +1984,14 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 		return NF_ACCEPT;
 	}
 	pp = pd->pp;
-	/*
-	 * Check if the packet belongs to an existing connection entry
-	 */
+	/* 进行con的查找 */
 	cp = INDIRECT_CALL_1(pp->conn_in_get, ip_vs_conn_in_get_proto,
 			     ipvs, af, skb, &iph);
 
 	if (!iph.fragoffs && is_new_conn(skb, &iph) && cp) {
+		/* 端口重用的情况。在检查到端口重用的情况发生时，根据reuse的模式来决定是否需要
+		 * 对连接进行重新调度。
+		 */
 		int conn_reuse_mode = sysctl_conn_reuse_mode(ipvs);
 		bool old_ct = false, resched = false;
 
@@ -2024,7 +2025,7 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 		}
 	}
 
-	/* Check the server status */
+	/* 找到了对应的conn，但是当前conn的后端不可用。 */
 	if (cp && cp->dest && !(cp->dest->flags & IP_VS_DEST_F_AVAILABLE)) {
 		/* the destination server is not available */
 		if (sysctl_expire_nodest_conn(ipvs)) {
@@ -2044,6 +2045,7 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 		}
 	}
 
+	/* 没有找到对应的conn记录，那么进行调度，这个过程中会创建新的conn记录。 */
 	if (unlikely(!cp)) {
 		int v;
 
@@ -2053,8 +2055,11 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 
 	IP_VS_DBG_PKT(11, af, pp, skb, iph.off, "Incoming packet");
 
+	/* 更新统计信息 */
 	ip_vs_in_stats(cp, skb);
+	/* 更新（通知）conn的状态变化 */
 	ip_vs_set_state(cp, IP_VS_DIR_INPUT, skb, pd);
+	/* 调用conn上面的钩子函数来处理报文。 */
 	if (cp->packet_xmit)
 		ret = cp->packet_xmit(skb, cp, pp, &iph);
 		/* do not touch skb anymore */
@@ -2126,6 +2131,14 @@ ip_vs_forward_icmp(void *priv, struct sk_buff *skb,
 	return ip_vs_in_icmp(ipvs, skb, &r, state->hook);
 }
 
+
+/* IPVS注册了netfilter的三个钩子，分别是local_in，local_out和forward。
+ * 
+ * 对于采用NAT的方式进行负载均衡的，其需要在local_in处发挥作用，即报文的
+ * 目的地址是本机，在local_in处将其目的地址改为RS的地址然后转发出去。
+ * 这里有两个可能的处理过程：SNAT和DNAT。对于NAT类型的IPVS，只会进行DNAT；
+ * 对于FULLNAT类型的，会进行SNAT+DNAT。
+ */
 static const struct nf_hook_ops ip_vs_ops4[] = {
 	/* After packet filtering, change source only for VS/NAT */
 	{

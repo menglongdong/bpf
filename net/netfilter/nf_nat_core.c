@@ -779,30 +779,53 @@ nf_nat_setup_info(struct nf_conn *ct,
 	if (nf_ct_is_confirmed(ct))
 		return NF_ACCEPT;
 
+	/* 该函数进行conntrack记录中NAT的状态初始化工作，包括从range里获取
+	 * 可用元组、进行ct状态的设置等。
+	 */
+
 	WARN_ON(maniptype != NF_NAT_MANIP_SRC &&
 		maniptype != NF_NAT_MANIP_DST);
 
 	if (WARN_ON(nf_nat_initialized(ct, maniptype)))
 		return NF_DROP;
 
-	/* What we've got will look like inverse of reply. Normally
-	 * this is what is in the conntrack, except for prior
-	 * manipulations (future optimization: if num_manips == 0,
-	 * orig_tp = ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple)
+	/* 
+	 * 这里没有直接取IP_CT_DIR_ORIGINAL元组作为curr_tuple元组，是因为此时
+	 * 报文可能已经被修改了，比如先进行DNAT，再进行SNAT，那这里的curr_tuple
+	 * 其实应该是DNAT之后的元组
 	 */
 	nf_ct_invert_tuple(&curr_tuple,
 			   &ct->tuplehash[IP_CT_DIR_REPLY].tuple);
 
+	/* 获取可用的元组（存放到tuple变量中）。该方法会先检查当前元组
+	 * （origin_tuple）是否可用，如果可用的话就直接使用。判断是否可用的依据
+	 * 是使用nf_nat_used_tuple()判断元组是否已经被占用。
+	 * 
+	 * 如果已经被占用，那么就会从可选区域中查找可用的地址或者端口，并存放到
+	 * tunple中。
+	 * 
+	 * 对于NAT来说，一般像iptables/nftables会调用nf_nat_setup_info()来
+	 * 初始化SNAT或者DNAT里的元组信息，初始化的时候将range设定为自己想要的
+	 * 值。在初始化完成后，netfilter会调用nf_nat_packet()来根据ct里的信息
+	 * 来修改报文。
+	 * 
+	 * 注意：对于SNAT或者DNAT操作，new_tuple和curr_tuple不会相等，因为
+	 * range里会限定要修改的地址或者端口范围。所以，对于SNAT或者DNAT，
+	 * ct->status标志位中一定设置了IPS_SRC_NAT或者IPS_DST_NAT。
+	 */
 	get_unique_tuple(&new_tuple, &curr_tuple, range, ct, maniptype);
 
 	if (!nf_ct_tuple_equal(&new_tuple, &curr_tuple)) {
 		struct nf_conntrack_tuple reply;
 
+		/* 如果新元组与老的不一样，那说明发送了SNAT或者DNAT。此时，将
+		 * 新的元组应用到ct上。
+		 */
 		/* Alter conntrack table so will recognize replies. */
 		nf_ct_invert_tuple(&reply, &new_tuple);
 		nf_conntrack_alter_reply(ct, &reply);
 
-		/* Non-atomic: we own this at the moment. */
+		/* 根据当前的HOOK点判断是发生了SNAT还是DNAT。 */
 		if (maniptype == NF_NAT_MANIP_SRC)
 			ct->status |= IPS_SRC_NAT;
 		else
@@ -826,7 +849,7 @@ nf_nat_setup_info(struct nf_conn *ct,
 		spin_unlock_bh(lock);
 	}
 
-	/* It's done. */
+	/* 走到这里，说明NAT冲突检测已经完成，已经进入了可以进行NAT的状态。 */
 	if (maniptype == NF_NAT_MANIP_DST)
 		ct->status |= IPS_DST_NAT_DONE;
 	else
@@ -873,12 +896,17 @@ unsigned int nf_nat_packet(struct nf_conn *ct,
 	unsigned int verdict = NF_ACCEPT;
 	unsigned long statusbit;
 
+	/* 判断当前的HOOK点是SNAT还是DNAT，并且与ct是在进行SNAT还是DNAT进行
+	 * 对比，如果一致的话就说明需要进行NAT（修改报文）。
+	 */
 	if (mtype == NF_NAT_MANIP_SRC)
 		statusbit = IPS_SRC_NAT;
 	else
 		statusbit = IPS_DST_NAT;
 
-	/* Invert if this is reply dir. */
+	/* 如果报文是响应报文，那么判断的方向也应该取反。比如SNAT，这里认为
+	 * PREROUTING的HOOK点应该要对响应报文做处理。
+	 */
 	if (dir == IP_CT_DIR_REPLY)
 		statusbit ^= IPS_NAT_MASK;
 
@@ -910,6 +938,18 @@ nf_nat_inet_fn(void *priv, struct sk_buff *skb,
 	/* maniptype == SRC for postrouting. */
 	enum nf_nat_manip_type maniptype = HOOK2MANIP(state->hook);
 
+	/* 该函数为netfilter进行NAT的核心函数，在prerouting、postrouting、
+	 * local_out和local_in处都会被调用。
+	 */
+
+	/* NAT收发包处理逻辑。首先检查是否存在conntrack信息，如果没有的话就直接
+	 * 返回ACCEPT。 CONNTRACK模块会先于NAT模块进行conntrack信息的创建。
+	 *
+	 * conntrack的创建发生于PREROUTING（ipv4_conntrack_in()函数里）或者
+	 * LOCAL_OUT（ipv4_conntrack_local()函数），由此可以看出内核会对所有
+	 * 本地发送出去的报文和接收到的报文进行conntrack跟踪。
+	 */
+
 	ct = nf_ct_get(skb, &ctinfo);
 	/* Can't track?  It's not due to stress, or conntrack would
 	 * have dropped it.  Hence it's the user's responsibilty to
@@ -926,8 +966,12 @@ nf_nat_inet_fn(void *priv, struct sk_buff *skb,
 	case IP_CT_RELATED_REPLY:
 		/* Only ICMPs can be IP_CT_IS_REPLY.  Fallthrough */
 	case IP_CT_NEW:
-		/* Seen it before?  This can happen for loopback, retrans,
-		 * or local packets.
+
+		/* 进行NAT两个方向上的初始化。这个过程一般在触发conntrack
+		 * 记录创建的那个报文的处理过程中完成。
+		 * 
+		 * 在PREROUTING/LOCAL_OUT处会完成DNAT的初始化；
+		 * 在POSTROUTING/LOCAL_IN处会完成SNAT的初始化。
 		 */
 		if (!nf_nat_initialized(ct, maniptype)) {
 			struct nf_nat_lookup_hook_priv *lpriv = priv;
@@ -938,6 +982,11 @@ nf_nat_inet_fn(void *priv, struct sk_buff *skb,
 			if (!e)
 				goto null_bind;
 
+			/* 遍历当前ops上的entries，并进行报文的处理。如果当前
+			 * HOOK点上存在ops且对该报文进行了NAT，那么ct上的NAT
+			 * 信息就会被初始化，然后跳转到do_nat。
+			 */
+
 			for (i = 0; i < e->num_hook_entries; i++) {
 				ret = e->hooks[i].hook(e->hooks[i].priv, skb,
 						       state);
@@ -947,6 +996,7 @@ nf_nat_inet_fn(void *priv, struct sk_buff *skb,
 					goto do_nat;
 			}
 null_bind:
+			/* 缺省的NAT初始化函数（不进行NAT） */
 			ret = nf_nat_alloc_null_binding(ct, state->hook);
 			if (ret != NF_ACCEPT)
 				return ret;
@@ -967,6 +1017,10 @@ null_bind:
 			goto oif_changed;
 	}
 do_nat:
+	/* 在ct中的NAT信息初始化好后，调用这里来进行报文内容的修改。这里会
+	 * 在ct->status标记为启用了NAT的情况下使用ct里的信息来修改报文的
+	 * 内容（地址、端口等）。
+	 */
 	return nf_nat_packet(ct, ctinfo, state->hook, skb);
 
 oif_changed:
@@ -1186,6 +1240,20 @@ int nf_nat_register_fn(struct net *net, u8 pf, const struct nf_hook_ops *ops,
 	unsigned int hooknum = ops->hooknum;
 	struct nf_hook_ops *nat_ops;
 	int i, ret;
+
+	/* 注册NAT的钩子函数。所有使用nat的模块，如nftables、iptables等，
+	 * 都不能直接将nf_hook_ops注册到netfilter，真正注册到netfilter
+	 * 的是netfilter自己定义的那一套nat钩子。以ipv4为例，对应的ops为
+	 * nf_nat_ipv4_ops 。
+	 * 
+	 * 注册的时候，即使只注册一个HOOK点（即只创建一个链），这里也会把
+	 * 所有的nf_nat_ipv4_ops给注册上。这是因为，nat发挥作用需要多个
+	 * HOOK协作完成，因此这里会都注册上。
+	 * 
+	 * 需要说明的是，netfilter的ops都有个私有字段（一个指针），其指向
+	 * 了struct nf_nat_lookup_hook_priv类型的变量，该变量中的entries
+	 * 中存放着用户真正想注册的所有的ops。
+	 */
 
 	if (WARN_ON_ONCE(pf >= ARRAY_SIZE(nat_net->nat_proto_net)))
 		return -EINVAL;

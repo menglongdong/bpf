@@ -100,6 +100,11 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	struct sk_buff *lp;
 	int segs;
 
+	/* 进行GRO FLUSH的函数。其中p为GRO链表中找到的和skb属于同一个流的报文，
+	 * skb为当前网口上接收到的报文。
+	 * 
+	 */
+
 	/* Do not splice page pool based packets w/ non-page pool
 	 * packets. This can result in reference count issues as page
 	 * pool pages will not decrement the reference count and will
@@ -123,6 +128,7 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	lp = NAPI_GRO_CB(p)->last;
 	pinfo = skb_shinfo(lp);
 
+	/* 进行head的pull操作 */
 	if (headlen <= offset) {
 		skb_frag_t *frag;
 		skb_frag_t *frag2;
@@ -347,6 +353,14 @@ static void gro_list_prepare(const struct list_head *head,
 	u32 hash = skb_get_hash_raw(skb);
 	struct sk_buff *p;
 
+	/* 
+	 * 取出skb上计算出来的hash值，这个值一般是网卡驱动计算出来并设置到skb上的。
+	 * 从链表hash中取出对应的链表，并遍历链表中的skb，将同一个流的skb（hash相同、
+	 * vlan、dev等配置都相同）的same_flow标记为1。
+	 * 
+	 * 然后将这个链表返回给调用者进行使用。
+	 */
+
 	list_for_each_entry(p, head, list) {
 		unsigned long diffs;
 
@@ -479,7 +493,12 @@ static enum gro_result dev_gro_receive(struct gro_node *gro,
 	gro_list_prepare(&gro_list->list, skb);
 
 	rcu_read_lock();
-	/* 对skb的一些GRO属性进行初始化，并调用当前skb的协议对应的GRO回调函数。 */
+	/* 对skb的一些GRO属性进行初始化，并调用当前skb的协议对应的GRO回调函数。
+	 * 其中，这里的ptype为每个协议（如IP协议）注册的packet_offload类型的
+	 * 钩子函数。
+	 * 
+	 * 以IP协议为例，这里会调用 inet_gro_receive() 函数。
+	 */
 	list_for_each_entry_rcu(ptype, head, list) {
 		if (ptype->type == type && ptype->callbacks.gro_receive)
 			goto found_ptype;

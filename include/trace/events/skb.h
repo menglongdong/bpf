@@ -28,6 +28,14 @@ TRACE_EVENT(kfree_skb,
 
 	TP_ARGS(skb, location, reason, rx_sk),
 
+	/* 这里定义了trace_event_raw_kfree_skb，其可以等价于：
+	 * struct trace_event_raw_kfree_skb {
+	 *	void *regs;
+	 *	void *skbaddr;
+	 *	void *location;
+	 *	unsigned short protocol;
+	 * };
+	 */
 	TP_STRUCT__entry(
 		__field(void *,		skbaddr)
 		__field(void *,		location)

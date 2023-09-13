@@ -575,11 +575,11 @@ static int __init nf_conntrack_ftp_init(void)
 
 	NF_CT_HELPER_BUILD_BUG_ON(sizeof(struct nf_ct_ftp_master));
 
+	/* 这里的ports是可以通过内核模块参数的方式来指定FTP的端口的，默认为21端口 */
 	if (ports_c == 0)
 		ports[ports_c++] = FTP_PORT;
 
-	/* FIXME should be configurable whether IPv4 and IPv6 FTP connections
-		 are tracked or not - YK */
+	/* 这里为每个要跟踪的端口创建两个ct_helper，即IPv4和IPv6分别一个。 */
 	for (i = 0; i < ports_c; i++) {
 		nf_ct_helper_init(&ftp[2 * i], AF_INET, IPPROTO_TCP,
 				  HELPER_NAME, FTP_PORT, ports[i], ports[i],
@@ -591,6 +591,7 @@ static int __init nf_conntrack_ftp_init(void)
 				  nf_ct_ftp_from_nlattr, THIS_MODULE);
 	}
 
+	/* 将所有的helper注册到 nf_ct_helper_hash 哈希表中。 */
 	ret = nf_conntrack_helpers_register(ftp, ports_c * 2);
 	if (ret < 0) {
 		pr_err("failed to register helpers\n");

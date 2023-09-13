@@ -1213,6 +1213,13 @@ __nf_conntrack_confirm(struct sk_buff *skb)
 	struct net *net;
 	int ret = NF_DROP;
 
+	/* 将conntrack放到哈希表里。这里会哈希两次，先取之前（conntrack刚创建
+	 * 的时候）保存下来的HASH值，再根据现有REPLY方向的元组创建的HASH值。
+	 *
+	 * 实质上，这里是把一条conntrack的两个方向元组都加入到了哈希表。如果说
+	 * 这个流没有被NAT，那么会发现其两个方向只是把地址和端口调换了一下。
+	 */
+
 	ct = nf_ct_get(skb, &ctinfo);
 	net = nf_ct_net(ct);
 
@@ -1773,6 +1780,10 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	struct nf_conntrack_zone tmp;
 	struct nf_conntrack_net *cnet;
 
+	/* 创建新的conntrack记录。这里创建的记录都是根据skb上获取到的元组来
+	 * 创建的，origin方向直接取的tuple，reply方向取的是tuple的取反。
+	 */
+
 	if (!nf_ct_invert_tuple(&repl_tuple, tuple))
 		return NULL;
 
@@ -1812,6 +1823,12 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	cnet = nf_ct_pernet(net);
 	if (cnet->expect_count) {
 		spin_lock_bh(&nf_conntrack_expect_lock);
+		/* 根据这个元组，找到对应的expect，并将expect上面的一些信息初始化
+		 * 到当前的ct上，包括将expect对应的ct_helper设置到ct的ext字段里。
+		 *
+		 * 查找的时候，当前报文的元组的目的地址、端口要与expect上的完全一致，
+		 * 源地址和端口可通过mask进行指定。
+		 */
 		exp = nf_ct_find_expectation(net, zone, tuple, !tmpl || nf_ct_is_confirmed(tmpl));
 		if (exp) {
 			/* Welcome, Mr. Bond.  We've been expecting you... */
@@ -1834,7 +1851,22 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 		}
 		spin_unlock_bh(&nf_conntrack_expect_lock);
 	}
+	/* 如果当前没有命中expect，那么尝试为其查找对应的ct_helper，即作为master
+	 * 连接来进行处理。
+	 *
+	 * 在进行helper查找的时候，会采用当前reply方向的元组进行匹配。这意味着，
+	 * helper里的元组默认是反方向的，即匹配的是ct响应报文。这也是为什么，ftp
+	 * 注册是helper的src元组的端口号是21
+	 * 
+	 * 这里查找到的help，会在ct进行confirm的时候（比如nf_confirm函数里）进行
+	 * 调用。调用的时候，snat和dnat的过程都已经完成了，此时ct上的元组信息是已经
+	 * nat过了的。
+	 */
 	if (!exp && tmpl)
+		/* 这里可以检查是否为mptcp，是的话强行设置mptcp对应的helper。
+		 * 调用helper的时候，再计算token、创建expect。同时，检查mptcp
+		 * 的时候，可以把一些信息直接设置到ct上，避免重复的计算。
+		 */
 		__nf_ct_try_assign_helper(ct, tmpl, GFP_ATOMIC);
 
 	/* Other CPU might have obtained a pointer to this object before it was
@@ -1850,6 +1882,10 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	/* Now it is going to be associated with an sk_buff, set refcount to 1. */
 	refcount_set(&ct->ct_general.use, 1);
 
+	/* 如果这是一个关联连接，那么调用expect上设置的钩子函数。对于支持NAT的FTP，
+	 * 这里会调用 nf_nat_follow_master ，而这个函数又会调用
+	 * nf_nat_setup_info 来初始化ct上的nat信息（相当于接管了NAT过程）。
+	 */
 	if (exp) {
 		if (exp->expectfn)
 			exp->expectfn(ct, exp);
@@ -1875,12 +1911,18 @@ resolve_normal_ct(struct nf_conn *tmpl,
 	u32 hash, zone_id, rid;
 	struct nf_conn *ct;
 
+	/* 进行conntrack信息的获取（或者创建）。如果没有找到对应的conntrack
+	 * 信息，那么就创建一个。这个函数一般在PREROUTING和LOCAL_OUT的地方
+	 * 会被调用。
+	 */
+
+	/* 从报文中来计算元组信息，不同的协议获取元组的方式不同。 */
 	if (!nf_ct_get_tuple(skb, skb_network_offset(skb),
 			     dataoff, state->pf, protonum, state->net,
 			     &tuple))
 		return 0;
 
-	/* look for tuple match */
+	/* 根据元组构建hash值，并从hash表里进行conntrack记录的查找。 */
 	zone = nf_ct_zone_tmpl(tmpl, skb, &tmp);
 
 	zone_id = nf_ct_zone_id(zone, IP_CT_DIR_ORIGINAL);
@@ -1897,6 +1939,7 @@ resolve_normal_ct(struct nf_conn *tmpl,
 	}
 
 	if (!h) {
+		/* 没有找到的话，新建conntrack记录。 */
 		h = init_conntrack(state->net, tmpl, &tuple,
 				   skb, dataoff, hash);
 		if (!h)
@@ -1906,7 +1949,13 @@ resolve_normal_ct(struct nf_conn *tmpl,
 	}
 	ct = nf_ct_tuplehash_to_ctrack(h);
 
-	/* It exists; we have (non-exclusive) reference. */
+	/* 下面来获取conntrack的状态。首先要判断当前这个报文的方向。
+	 * 以DNAT为例，被DNAT的报文的方向为ORIGIN，响应的报文的方向为REPLY。
+	 * 
+	 * 这里可以看出，对于响应的报文，其状态始终为IP_CT_ESTABLISHED_REPLY
+	 * 状态。对于ORIGIN方向的报文，如果收到过响应报文，那么其状态为
+	 * IP_CT_ESTABLISHED；否则，其状态为NEW或者RELATED。
+	 */
 	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY) {
 		ctinfo = IP_CT_ESTABLISHED_REPLY;
 	} else {

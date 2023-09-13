@@ -380,6 +380,14 @@ unsigned int nf_nat_manip_pkt(struct sk_buff *skb, struct nf_conn *ct,
 {
 	struct nf_conntrack_tuple target;
 
+	/* 根据ct里的信息，进行报文的NAT（修改报文地址和端口）。这里会
+	 * 根据报文的三层协议和四层协议取调用相应的函数来修改报文（如
+	 * IP地址和TCP端口等）。
+	 * 
+	 * 对于ORIGIN方向的报文，会取REPLY方向的tuple，并使用其中的信息
+	 * 来修改报文。
+	 */
+
 	/* We are aiming to look like inverse of other direction. */
 	nf_ct_invert_tuple(&target, &ct->tuplehash[!dir].tuple);
 

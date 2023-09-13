@@ -54,6 +54,13 @@ __nf_conntrack_helper_find(const char *name, u16 l3num, u8 protonum)
 	struct nf_conntrack_helper *h;
 	unsigned int i;
 
+	/* 这里的查找逻辑有点简单，他只是简单地匹配src的地址和端口（包括三层、四层协议）
+	 * 是否匹配。
+	 *
+	 * 由于都是反向的元组，因此这里实际上是匹配目的地址和目的端口一致。这个好像不是
+	 * 很通用的样子？
+	 */
+
 	for (i = 0; i < nf_ct_helper_hsize; i++) {
 		hlist_for_each_entry_rcu(h, &nf_ct_helper_hash[i], hnode) {
 			if (strcmp(h->name, name))
@@ -179,6 +186,7 @@ nf_ct_helper_ext_add(struct nf_conn *ct, gfp_t gfp)
 {
 	struct nf_conn_help *help;
 
+	/* 往ct的ext字段增加一个对象，对象的类型为 NF_CT_EXT_HELPER */
 	help = nf_ct_ext_add(ct, NF_CT_EXT_HELPER, gfp);
 	if (help)
 		INIT_HLIST_HEAD(&help->expectations);

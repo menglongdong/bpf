@@ -10,6 +10,9 @@
 #include <net/netfilter/nf_conntrack_tuple.h>
 #include <uapi/linux/netfilter/nf_nat.h>
 
+/* 判断HOOK点是用作SNAT的还是DNAT的。对于SNAT，起作用的HOOK点为POSTROUTING
+ * 和LOCAL_IN。
+ */
 enum nf_nat_manip_type {
 	NF_NAT_MANIP_SRC,
 	NF_NAT_MANIP_DST

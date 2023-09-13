@@ -75,12 +75,18 @@ struct nf_hook_ops;
 
 struct sock;
 
+/* 传递给钩子函数的状态信息，包括当前的HOOK点，网络命令空间，网口等。 */
 struct nf_hook_state {
+	/* 当前的HOOK点 */
 	u8 hook;
+	/* 协议族 */
 	u8 pf;
+	/* 收包网口 */
 	struct net_device *in;
+	/* 发包网口 */
 	struct net_device *out;
 	struct sock *sk;
+	/* 所属网络命名空间 */
 	struct net *net;
 	int (*okfn)(struct net *, struct sock *, struct sk_buff *);
 };
@@ -95,6 +101,10 @@ enum nf_hook_ops_type {
 	NF_HOOK_OP_NFT_FT,
 };
 
+
+/* OPS结构体。该结构体用于钩子函数的定义和注册，其中entry就是注册的时候从这个
+ * 结构体上提取出来的（为啥不直接使用这个结构体呢？）
+ */
 struct nf_hook_ops {
 	struct list_head	list;
 	struct rcu_head		rcu;
@@ -106,10 +116,13 @@ struct nf_hook_ops {
 	u8			pf;
 	enum nf_hook_ops_type	hook_ops_type:8;
 	unsigned int		hooknum;
-	/* Hooks are ordered in ascending priority. */
+	/* 优先级，同一个HOOK点上的不同ops通过这个来进行排序，按照从小到大
+	 * 的顺序排列。
+	 */
 	int			priority;
 };
 
+/* 注册在HOOK点上的防火墙处理函数。 */
 struct nf_hook_entry {
 	nf_hookfn			*hook;
 	void				*priv;
@@ -120,6 +133,16 @@ struct nf_hook_entries_rcu_head {
 	void	*allocation;
 };
 
+/* 以数组的方式将多个nf_hook_entry组织起来的结构体。一般，一个协议族或者是
+ * 一种防火墙（如ipv4）的一个HOOK点会对应一个nf_hook_entries，代表所有注册
+ * 在这个HOOK点上的处理函数。
+ * 
+ * 这个结构体在数据存储方面采用了下面的结构图：
+ * num_hook_entries | (struct nf_hook_entry) * num_hook_entries |
+ * (struct nf_hook_ops) * num_hook_entries
+ * 
+ * 每个entry都有一个与之对应的ops，通过index可以直接找到entry和ops。
+ */
 struct nf_hook_entries {
 	u16				num_hook_entries;
 	/* padding */
@@ -231,6 +254,10 @@ static inline int nf_hook(u_int8_t pf, unsigned int hook, struct net *net,
 {
 	struct nf_hook_entries *hook_head = NULL;
 	int ret = 1;
+
+	/* 根据pf（协议族）和hook（HOOK点）找到对应的nf_hook_entries，并
+	 * 调用nf_hook_slow来执行所有的钩子函数。
+	 */
 
 #ifdef CONFIG_JUMP_LABEL
 	if (__builtin_constant_p(pf) &&

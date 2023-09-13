@@ -214,6 +214,8 @@ static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue 
 {
 	struct request_sock *req;
 
+	/* 将queue中的第一个req套接口从队列（链表）中取出来，并将对应的引用计数-1 */
+
 	spin_lock_bh(&queue->rskq_lock);
 	req = queue->rskq_accept_head;
 	if (req) {

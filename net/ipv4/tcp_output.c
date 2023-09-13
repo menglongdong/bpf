@@ -1402,6 +1402,9 @@ void tcp_wfree(struct sk_buff *skb)
 
 	oval = smp_load_acquire(&sk->sk_tsq_flags);
 	do {
+		/* 处理TSQ的场景，即当前TSQ阻塞了报文发送，那么在报文释放后会
+		 * 调度当前CPU上的tasklet去进行报文的发送。
+		 */
 		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED))
 			goto out;
 
@@ -3092,6 +3095,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		    unlikely(tso_fragment(sk, skb, limit, mss_now, gfp)))
 			break;
 
+		/* 进行TSQ检查，确保Qdisc中的报文数量（即 sk_wmem_alloc 的值）
+		 * 不能超过上限值。
+		 */
 		if (tcp_small_queue_check(sk, skb, 0))
 			break;
 
@@ -3120,6 +3126,9 @@ repair:
 			break;
 	}
 
+	/* 如果出现了零窗口（接收方的收包窗口不足导致报文无法继续发送），那么开始
+	 * 计时？
+	 */
 	if (is_rwnd_limited)
 		tcp_chrono_start(sk, TCP_CHRONO_RWND_LIMITED);
 	else
@@ -4687,6 +4696,7 @@ void tcp_send_probe0(struct sock *sk)
 	unsigned long timeout;
 	int err;
 
+	/* 进行probe报文的重传。 */
 	err = tcp_write_wakeup(sk, LINUX_MIB_TCPWINPROBE);
 
 	if (tp->packets_out || tcp_write_queue_empty(sk)) {
