@@ -1641,6 +1641,10 @@ int __cgroup_bpf_run_filter_sk(struct sock *sk,
 {
 	struct cgroup *cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
 
+	/* 获取当前sock所属于的cgroup，并运行该cgroup上的eBPF程序。注意，这里
+	 * 的cgroup是v2版本的，v1版本sock是没有cgroup的，因为v1有多个层级，
+	 * 因此无法判定sock属于哪个层级。
+	 */
 	return bpf_prog_run_array_cg(&cgrp->bpf, atype, sk, bpf_prog_run, 0,
 				     NULL);
 }
