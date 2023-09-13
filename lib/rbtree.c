@@ -467,10 +467,7 @@ struct rb_node *rb_next(const struct rb_node *node)
 	if (RB_EMPTY_NODE(node))
 		return NULL;
 
-	/*
-	 * If we have a right-hand child, go down and then left as far
-	 * as we can.
-	 */
+	/* 如果有右子树，那么取右子树的最左边的节点，即是下一个节点 */
 	if (node->rb_right) {
 		node = node->rb_right;
 		while (node->rb_left)
@@ -478,12 +475,9 @@ struct rb_node *rb_next(const struct rb_node *node)
 		return (struct rb_node *)node;
 	}
 
-	/*
-	 * No right-hand children. Everything down and left is smaller than us,
-	 * so any 'next' node must be in the general direction of our parent.
-	 * Go up the tree; any time the ancestor is a right-hand child of its
-	 * parent, keep going up. First time it's a left-hand child of its
-	 * parent, said parent is our 'next' node.
+	/* 
+	 * 从当前节点往上找，找到当前节点是左节点的节点，那么其父节点即为下一个节点，
+	 * 这是标准的BST树节点查找流程。
 	 */
 	while ((parent = rb_parent(node)) && node == parent->rb_right)
 		node = parent;

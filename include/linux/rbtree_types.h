@@ -3,6 +3,7 @@
 #define _LINUX_RBTREE_TYPES_H
 
 struct rb_node {
+	/* 这个字段代表当前节点的父节点地址，其中后两位代表当前的颜色 */
 	unsigned long  __rb_parent_color;
 	struct rb_node *rb_right;
 	struct rb_node *rb_left;
