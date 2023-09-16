@@ -179,6 +179,15 @@ static bool inet_bind_conflict(const struct sock *sk, struct sock *sk2,
 
 	bound_dev_if2 = READ_ONCE(sk2->sk_bound_dev_if);
 
+	/* 端口绑定冲突检查。以下情况会认为没有冲突：
+	 * - 两个sk都绑定了dev，且不是同一个dev
+	 * - 两个都开启了地址重用，且没有listen套接口，且ip_autobind_reuse开启
+	 *   了。可以看出来，默认情况下开启地址重用也不会重用端口的。
+	 * - 目标端口开启了端口重用功能
+	 * 
+	 * 这里没有考虑地址，地址会在调用者那里进行比较。
+	 */
+
 	if (!sk->sk_bound_dev_if || !bound_dev_if2 ||
 	    sk->sk_bound_dev_if == bound_dev_if2) {
 		if (sk->sk_reuse && sk2->sk_reuse &&
@@ -260,6 +269,8 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 	 * 1、两个都绑定了网口，并且绑定的不是一个网口；
 	 * 2、地址复用：两个套接口都启用了地址复用，且没有套接口处于listen状态下。
 	 *    当存在listen状态下的端口时，地址复用不起作用，此时禁止绑定。
+	 *    同时，如果是autobind的情况，只有开启了ip_autobind_reuse才允许
+	 *    地址复用。
 	 * 3、端口复用：两个套接口都启用了端口复用功能，且两个
 	 *    套接口属于同一个用户，或者某一个处于TCP_TIME_WAIT状态。
 	 *    对于UDP，它会均匀的将报文分发给所有的套接口；
@@ -268,6 +279,11 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 	 * 4、两个目的地址不同，且都不是0（0认为匹配所有的地址）。
 	 *
 	 * 其他情况下，绑定端口相同都会认为冲突。
+	 */
+
+	/* 
+	 * 这里可以看出来，如果指定了本地地址，那么会采用bhash2上的bucket进行
+	 * 冲突检查；否则，使用bhash上的bucket进行冲突检查。
 	 */
 
 	/* Conflicts with an existing IPV6_ADDR_ANY (if ipv6) or INADDR_ANY (if
@@ -322,10 +338,12 @@ static bool inet_bhash2_addr_any_conflict(const struct sock *sk, int port, int l
 
 	spin_lock(&head2->lock);
 
+	/* 从链表中找到目标端口的bucket */
 	inet_bind_bucket_for_each(tb2, &head2->chain) {
 		if (!inet_bind2_bucket_match_addr_any(tb2, net, port, l3mdev, sk))
 			continue;
 
+		/* 检查目标端口是否与当前套接口冲突，能否使用 */
 		if (!inet_bhash2_conflict(sk, tb2, uid, relax, reuseport_cb_ok,	reuseport_ok))
 			continue;
 
@@ -358,6 +376,9 @@ inet_csk_find_open_port(const struct sock *sk, struct inet_bind_bucket **tb_ret,
 
 	l3mdev = inet_sk_bound_l3mdev(sk);
 ports_exhausted:
+	/* 检查是否开启了地址重用功能。如果开启了地址重用功能，那么尝试从port range
+	 * 中的上半部分进行查找，尽量查找已经开启了地址重用的端口来进行使用。
+	 */
 	attempt_half = (sk->sk_reuse == SK_CAN_REUSE) ? 1 : 0;
 other_half_scan:
 	inet_sk_get_local_port_range(sk, &low, &high);
@@ -367,6 +388,7 @@ other_half_scan:
 	if (attempt_half) {
 		int half = low + (((high - low) >> 2) << 1);
 
+		/* 先查找前半段 */
 		if (attempt_half == 1)
 			high = half;
 		else
@@ -376,9 +398,13 @@ other_half_scan:
 	if (likely(remaining > 1))
 		remaining &= ~1U;
 
+	/* 从当前范围内随机选取一个开始扫描的端口 */
 	offset = get_random_u32_below(remaining);
 	/* __inet_hash_connect() favors ports having @low parity
 	 * We do the opposite to not pollute connect() users.
+	 */
+	/* __inet_hash_connect 里面优先使用偶数作为开始扫描的端口，这里反着来：
+	 * 优先选取奇数，扫描完了再扫描偶数。
 	 */
 	offset |= 1U;
 
@@ -392,6 +418,10 @@ other_parity_scan:
 		head = &hinfo->bhash[inet_bhashfn(net, port,
 						  hinfo->bhash_size)];
 		spin_lock_bh(&head->lock);
+		/* 根据当前的套接口是否指定了本地地址来决定其使用bhash还是
+		 * bhash2。如果指定了本地地址，那么先判断其是否和ANY:PORT
+		 * 情况下的组合冲突。
+		 */
 		if (inet_use_bhash2_on_bind(sk)) {
 			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, relax, false))
 				goto next_port;
@@ -399,8 +429,21 @@ other_parity_scan:
 
 		head2 = inet_bhashfn_portaddr(hinfo, sk, net, port);
 		spin_lock(&head2->lock);
+		/* 根据当前的ADDR:PORT找到的实例 */
 		tb2 = inet_bind2_bucket_find(head2, net, port, l3mdev, sk);
-		/* 遍历hash链表，找到匹配的端口，能找到的话说明当前端口已经被使用了 */
+		/* 遍历hash链表，找到匹配的端口，能找到的话说明当前端口已经被使用了。
+		 * 这里遍历的是bhash表，里面存放的是当前端口的所有的使用者。
+		 *
+		 * 先找到当前端口的bucket，然后将tb/tb2一起传给inet_csk_bind_conflict
+		 * 来判断当前端口是否可用。
+		 * 
+		 * 这里如果指定了地址，那么就只会用tb2来进行检查；否则，使用
+		 * tb进行检查。
+		 * 
+		 * 上面的inet_bhash2_addr_any_conflict里已经对ANY:PORT对应的
+		 * tb2进行了检查，这里会对ADDR:PORT对应的tb2进行检查。可以看出来，
+		 * 根据是否指定了本地地址，其检查所使用的哈希表也是完全不同的。
+		 */
 		inet_bind_bucket_for_each(tb, &head->chain)
 			if (inet_bind_bucket_match(tb, net, port, l3mdev)) {
 				if (!inet_csk_bind_conflict(sk, tb, tb2,
@@ -417,15 +460,18 @@ next_port:
 	}
 
 	offset--;
+	/* 奇数的扫描完了且没找到合适的，那么从头开始扫描偶数的。 */
 	if (!(offset & 1))
 		goto other_parity_scan;
 
+	/* 前半部分扫描完了没扫描到，那么从头开始扫描后半部分。 */
 	if (attempt_half == 1) {
 		/* OK we now try the upper half of the range */
 		attempt_half = 2;
 		goto other_half_scan;
 	}
 
+	/* 还是没有扫描到，那么这个时候尝试ip_autobind_reuse的解决方案。 */
 	if (READ_ONCE(net->ipv4.sysctl_ip_autobind_reuse) && !relax) {
 		/* We still have a chance to connect to different destinations */
 		relax = true;
@@ -557,6 +603,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 
 		head2_lock_acquired = true;
 
+		/* 找到了一个可用的端口，且端口的tb和tb2都已经创建好了的。 */
 		if (tb && tb2)
 			goto success;
 		found_port = true;
@@ -574,6 +621,8 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		/* 
 		 * 遍历桶，找到port对应的inet_bind_bucket。如果没有找到，那么说明这个端口
 		 * 还没有被使用过，那么下面会为这个端口重新分配一个inet_bind_bucket。
+		 * 
+		 * 这里是仅根据端口从bhash找到的tb
 		 */
 		inet_bind_bucket_for_each(tb, &head->chain)
 			if (inet_bind_bucket_match(tb, net, port, l3mdev))
@@ -588,6 +637,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		bhash_created = true;
 	}
 
+	/* 这个代码块主要处理指定了端口的情况，未指定端口的话是不会走进来的 */
 	if (!found_port) {
 		/* 
 		 * tb->owners存储的是使用port的套接口，如果为空的话，就不需要进行什么检测了
@@ -628,6 +678,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		bhash2_created = true;
 	}
 
+	/* 指定了端口且需要进行冲突检查 */
 	if (!found_port && check_bind_conflict) {
 		/* 进行完整的端口冲突检测。 */
 		if (inet_csk_bind_conflict(sk, tb, tb2, true, true))

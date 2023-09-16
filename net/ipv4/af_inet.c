@@ -564,6 +564,8 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 				 * 注意：这里会取消对地址的绑定，但是端口还是
 				 * 绑定成功了。所以如果这里的绑定没有指定地址
 				 * 那么是可以正常工作的。
+				 * 
+				 * 下面的我提交的put_port修复了这个问题。
 				 */
 				inet->inet_saddr = inet->inet_rcv_saddr = 0;
 				if (sk->sk_prot->put_port)

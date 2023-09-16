@@ -534,6 +534,7 @@ static struct sock *reuseport_select_sock_by_hash(struct sock_reuseport *reuse,
 	do {
 		struct sock *sk = reuse->socks[i];
 
+		/* 对于非建链的套接口，这里会优先选择当前CPU上的套接口。 */
 		if (sk->sk_state != TCP_ESTABLISHED) {
 			/* Paired with WRITE_ONCE() in __reuseport_(get|put)_incoming_cpu(). */
 			if (!READ_ONCE(reuse->incoming_cpu))

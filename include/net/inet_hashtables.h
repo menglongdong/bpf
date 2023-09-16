@@ -175,6 +175,9 @@ struct inet_hashinfo {
 	 * or sk->sk_v6_rcv_saddr (ipv6). This 2nd bind table is used
 	 * primarily for expediting bind conflict resolution.
 	 */
+	/* 根据本地端口和地址进行哈希绑定的哈希表。这个哈希表和上面那个只能同时使用
+	 * 一个，即套接口只能存在于其中一个哈希表中。
+	 */
 	struct inet_bind_hashbucket	*bhash2;
 	unsigned int			bhash_size;
 
@@ -188,7 +191,13 @@ struct inet_hashinfo {
 	/* 这个hash表存放的是所有listen状态的套接口，通过sk->sk_node来链接。
 	 * 该hash是根据源端口来进行hash的。
 	 *
-	 * 这里原本有个listening哈希表的，不知道为啥删除了？
+	 * 这里原本有个listening哈希表的，在下面的这个提交中进行删除了：
+	 * 
+	 * d9fbc7f6431fc0 ("net: tcp: prefer listeners bound to an address")
+	 * 
+	 * 这个提交认为，当多个套接口listen到同一个端口的时候，优先选择绑定了IP
+	 * 地址的套接口。由于listening哈希表是只使用端口进行哈希的，会匹配到
+	 * ANY和绑定了地址的，为了简化，这里将其删除了。
 	 */
 
 	bool				pernet;

@@ -639,6 +639,8 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 		 * 
 		 * 如果冲突的套接口是tw套接口，而且启用了tcp_tw_reuse，那么认为
 		 * 不冲突，否则，认为冲突。
+		 * 
+		 * 如果当前端口被listen了，那么不认为冲突，也是可以使用的吗？
 		 */
 
 		if (likely(inet_match(net, sk2, acookie, ports, dif, sdif))) {
@@ -1125,8 +1127,9 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 	offset = READ_ONCE(table_perturb[index]) + (port_offset >> 32);
 	offset %= remaining;
 
-	/* In first pass we try ports of @low parity.
-	 * inet_csk_get_port() does the opposite choice.
+	/* 这里先从偶数开始扫描，逻辑和 inet_csk_get_port 的逻辑相反。这里是为了
+	 * 避免connect()占用了太多的本地端口，导致bind()系统调用没有端口可以
+	 * 使用。
 	 */
 	if (!local_ports)
 		offset &= ~1U;
@@ -1166,6 +1169,10 @@ other_parity_scan:
 				    tb->fastreuseport >= 0)
 					goto next_port_unlock;
 				WARN_ON(hlist_empty(&tb->bhash2));
+				/* 端口和地址重用都没有打开，因此只需要检查四元组
+				 * 是否冲突。这种情况下，是允许当前端口存在listen
+				 * 套接口的。
+				 */
 				if (!check_established(death_row, sk,
 						       port, &tw, false,
 						       hash_port0 + port))
@@ -1174,6 +1181,7 @@ other_parity_scan:
 			}
 		}
 
+		/* 当前端口没有任何人使用，可以直接拿来用 */
 		tb = inet_bind_bucket_create(hinfo->bind_bucket_cachep,
 					     net, head, port, l3mdev);
 		if (!tb) {
