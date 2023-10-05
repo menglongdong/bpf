@@ -1045,6 +1045,7 @@ static void *virtqueue_get_buf_ctx_split_in_order(struct vring_virtqueue *vq,
 
 static void virtqueue_disable_cb_split(struct vring_virtqueue *vq)
 {
+	/* 通过给这个字段设置上对应的flag，可以告诉后端不要触发当前队列上的中断。 */
 	if (!(vq->split.avail_flags_shadow & VRING_AVAIL_F_NO_INTERRUPT)) {
 		vq->split.avail_flags_shadow |= VRING_AVAIL_F_NO_INTERRUPT;
 
@@ -3237,6 +3238,8 @@ static inline bool more_used(const struct vring_virtqueue *vq)
 irqreturn_t vring_interrupt(int irq, void *_vq)
 {
 	struct vring_virtqueue *vq = to_vvq(_vq);
+
+	/* virtio设备的中断处理函数。这里直接调用队列上的回调函数进行中断的处理。 */
 
 	if (!more_used(vq)) {
 		pr_debug("virtqueue interrupt with no work for %p\n", vq);
