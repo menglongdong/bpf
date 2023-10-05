@@ -242,6 +242,9 @@ kill:
 	/**
 	 * 在处于TIME_WAIT状态下，如果接收到了syn报文，那么就进行新连接的建立。
 	 * tcp_tw_isn用于标识本次是基于TW的建链，这种建链不能使用cookie模式。
+	 * 
+	 * 当前报文的序列号更大，或者报文里的时间戳更新，都认为这是一个有效的报文，
+	 * 没有发生序列号回绕。
 	 */
 	if (th->syn && !th->rst && !th->ack && !paws_reject &&
 	    (after(TCP_SKB_CB(skb)->seq, rcv_nxt) ||

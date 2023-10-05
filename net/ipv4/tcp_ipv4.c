@@ -2450,12 +2450,15 @@ do_time_wait:
 					       &drop_reason);
 	switch (tw_status) {
 	case TCP_TW_SYN: {
-			/* 端口复用下，新SYN命中LISTEN时可接管并替换TW。 */
+			/*
+			 * tw reuse的情况，有新的连接想使用这个套接口。此时，需要将TW套接口
+			 * 关闭，然后当做一个新的建链请求来处理。
+			 */
 			struct sock *sk2 = inet_lookup_listener(net, skb, __tcp_hdrlen(th),
 								iph->saddr, th->source,
 								iph->daddr, th->dest,
-							inet_iif(skb),
-							sdif);
+								inet_iif(skb),
+								sdif);
 		if (sk2) {
 			inet_twsk_deschedule_put(inet_twsk(sk));
 			sk = sk2;

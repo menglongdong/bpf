@@ -544,6 +544,9 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 	 * 如果指定了端口（绑定特定的端口）或者未指定（随机分配）并且没有启用
 	 * bind_address_no_port选项，那么调用当前协议的get_port方法进行
 	 * 端口的绑定操作。对于TCP协议，此处为inet_csk_get_port()。
+	 *
+	 * 这里的BIND_ADDRESS_NO_PORT可以通过socket option进行设置，用途是
+	 * 为了绑定地址用于connect，但是又不想占用端口，导致端口被耗尽。
 	 */
 	if (snum || !(inet_test_bit(BIND_ADDRESS_NO_PORT, sk) ||
 		      (flags & BIND_FORCE_ADDRESS_NO_PORT))) {

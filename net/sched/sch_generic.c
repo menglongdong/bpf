@@ -190,6 +190,9 @@ static inline void dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
 		skb = next;
 	}
 
+	/* dev无法再发送报文了，需要调度tx软中断，在下个发包周期里进行发送。这里设置
+	 * __QDISC_STATE_MISSED的话，在qdisc_run_end中会进行tx的调度。
+	 */
 	if (lock) {
 		spin_unlock(lock);
 		set_bit(__QDISC_STATE_MISSED, &q->state);
