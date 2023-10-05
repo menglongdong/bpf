@@ -533,6 +533,9 @@ static int ipvlan_process_v6_outbound(struct sk_buff *skb)
 }
 #endif
 
+/* 将报文的目标网口设置为master网口，当前的网络命名空间设置为master所在的网络命名空间，
+ * 并从ip层进行报文的发送
+ */
 static int ipvlan_process_outbound(struct sk_buff *skb)
 {
 	int ret = NET_XMIT_DROP;
@@ -600,6 +603,9 @@ static void ipvlan_multicast_enqueue(struct ipvl_port *port,
 	}
 }
 
+/* L3模式，仅根据报文的目的地址进行子接口的查找。
+ * 
+ */
 static int ipvlan_xmit_mode_l3(struct sk_buff *skb, struct net_device *dev)
 {
 	const struct ipvl_dev *ipvlan = netdev_priv(dev);
@@ -611,6 +617,17 @@ static int ipvlan_xmit_mode_l3(struct sk_buff *skb, struct net_device *dev)
 	if (!lyr3h)
 		goto out;
 
+	/* L3模式下，不同网段的子网口之间可以进行通信。但是这种模式下不能处理广播报文，
+	 * 因此在没有手动配置arp的情况下外部是无法访问到这个ip地址的，因为它不会处理
+	 * arp广播报文。但是由于该模式下没有arp的处理过程，因此效率比较高，适合本地
+	 * 子网口之间通信。
+	 * 
+	 * 在向外部发送的时候，该模式会把报文交给master网口，并传递到IP层进行后续报文
+	 * 的发送。由于当前的网口是master网口，因此在进行路由的时候即使目的地址是
+	 * local，也不会设置为loopback，不会送回到内核协议栈。
+	 * 
+	 * 这种模式下的网口会设置IFF_NOARP标准，发送接收报文的时候不会进行ARP的查找。
+	 */
 	if (!ipvlan_is_vepa(ipvlan->port)) {
 		addr = ipvlan_addr_lookup(ipvlan->port, lyr3h, addr_type, true);
 		if (addr) {
@@ -635,6 +652,9 @@ static int ipvlan_xmit_mode_l2(struct sk_buff *skb, struct net_device *dev)
 	void *lyr3h;
 	int addr_type;
 
+	/* L2模式下，子网口可以像L3一样跨网段通信。不同的是，在向外部发送报文时，
+	 * 它是传递到master网口的链路层进行发送的。
+	 */
 	if (!ipvlan_is_vepa(ipvlan->port) &&
 	    ether_addr_equal(eth->h_dest, eth->h_source)) {
 		lyr3h = ipvlan_get_L3_hdr(ipvlan->port, skb, &addr_type);

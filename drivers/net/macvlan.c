@@ -34,6 +34,10 @@
 #include <linux/netpoll.h>
 #include <linux/phy.h>
 
+/* macvlan网卡是以mac地址作为管理和查找对象的，这和ipvlan以IP地址作为查找的目标
+ * 是对应的关系。
+ */
+
 #define MACVLAN_HASH_BITS	8
 #define MACVLAN_HASH_SIZE	(1<<MACVLAN_HASH_BITS)
 #define MACVLAN_DEFAULT_BC_QUEUE_LEN	1000
@@ -461,6 +465,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	int ret;
 	rx_handler_result_t handle_res;
 
+	/* master网卡收到报文后的处理逻辑 */
+
 	/* Packets from dev_loopback_xmit() do not have L2 header, bail out */
 	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
 		return RX_HANDLER_PASS;
@@ -488,6 +494,10 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 			handle_res = RX_HANDLER_CONSUMED;
 			goto out;
 		}
+
+		/* 多播处理流程，将报文加入到广播队列中，在工作队列中调用
+		 * macvlan_process_broadcast 函数进行广播报文的处理。
+		 */
 
 		hash = mc_hash(NULL, eth->h_dest);
 		if (test_bit(hash, port->bc_filter))
