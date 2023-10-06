@@ -768,7 +768,9 @@ void tcp_push(struct sock *sk, int flags, int mss_now,
 
 	tcp_mark_urg(tp, flags);
 
-	/* 检查是否启用自动并包 */
+	/* 检查是否启用自动并包。这里可以看出来，autocork利用的是TSQ的机制，即skb被
+	 * 孤立的时候的回调函数。
+	 */
 	if (tcp_should_autocork(sk, skb, size_goal)) {
 
 		/* avoid atomic op if TSQ_THROTTLED bit is already set */
@@ -1476,7 +1478,7 @@ new_segment:
 
 		/* 
 		 * 如果未发送的数据超过了一半的窗口，那么强制发送出去。如果当前报文是
-		 * 发送队列中的第一个，那么将其以nagle算法发送出去。
+		 * 发送队列中的第一个，那么也强制发送出去（不使用nagle算法）。
 		 */
 		if (forced_push(tp)) {
 			tcp_mark_push(tp, skb);
