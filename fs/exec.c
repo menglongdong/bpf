@@ -1139,6 +1139,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * not visible until then. Doing it here also ensures
 	 * we don't race against replace_mm_exe_file().
 	 */
+	/* 将当前的可执行文件绑定到新分配的mm上 */
 	retval = set_mm_exe_file(bprm->mm, bprm->file);
 	if (retval)
 		goto out;
@@ -1152,6 +1153,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * Release all of the old mmap stuff
 	 */
 	acct_arg_size(bprm, 0);
+	/* 进行内存的切换，将新内存设置到当前进程上。 */
 	retval = exec_mmap(bprm->mm);
 	if (retval)
 		goto out;
@@ -1676,6 +1678,9 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			continue;
 		read_unlock(&binfmt_lock);
 
+		/* 调用对应类型的handler来加载可执行文件内容。例如，对于Elf文件，会
+		 * 调用 load_elf_binary 来执行。
+		 */
 		retval = fmt->load_binary(bprm);
 
 		read_lock(&binfmt_lock);
@@ -1708,6 +1713,7 @@ static int exec_binprm(struct linux_binprm *bprm)
 		if (depth > 5)
 			return -ELOOP;
 
+		/* 根据Elf文件的类型查找对应的handler */
 		ret = search_binary_handler(bprm);
 		if (ret < 0)
 			return ret;

@@ -1007,7 +1007,7 @@ out_free_interp:
 	if (retval)
 		goto out_free_dentry;
 
-	/* Flush all traces of the currently running executable */
+	/* 切换当前进程的exec文件，同时切换mm，释放老的mm */
 	retval = begin_new_exec(bprm);
 	if (retval)
 		goto out_free_dentry;
