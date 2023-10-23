@@ -1513,6 +1513,7 @@ static bool rt_cache_route(struct fib_nh_common *nhc, struct rtable *rt)
 	prev = cmpxchg(p, orig, rt);
 	if (prev == orig) {
 		if (orig) {
+			/* 释放原来的引用，并将其加入到uncached链表中 */
 			rt_add_uncached_list(orig);
 			dst_release(&orig->dst);
 		}
@@ -1639,6 +1640,9 @@ static void rt_set_nexthop(struct rtable *rt, __be32 daddr,
 			rt_add_uncached_list(rt);
 		}
 	} else
+		/* 广播、多播等情况，这里的fi为NULL，这种情况下，不能缓存rt，需要将其
+		 * 加入到uncached链表中。
+		 */
 		rt_add_uncached_list(rt);
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
@@ -2638,6 +2642,9 @@ static struct rtable *__mkroute_output(const struct fib_result *res,
 		 * packet he won't receive it because it will be delivered on
 		 * the loopback interface and the IP_PKTINFO ipi_ifindex will
 		 * be set to the loopback interface as well.
+		 */
+		/* 报文发到了本地，且指定了网口，那么不进行路由缓存。这是为了避免产生
+		 * 不正确的行为。
 		 */
 		do_cache = false;
 	}

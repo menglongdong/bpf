@@ -870,6 +870,7 @@ static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
 	tp->rcv_rtt_est.rtt_us = new_sample;
 }
 
+/* 接收到数据后（已经放到了queue中），更新rtt的函数 */
 static inline void tcp_rcv_rtt_measure(struct tcp_sock *tp)
 {
 	u32 delta_us;
@@ -905,6 +906,7 @@ static s32 tcp_rtt_tsopt_us(const struct tcp_sock *tp, u32 min_delta)
 	return -1;
 }
 
+/* 接收到数据后（还没放到queue中），更新rtt的函数 */
 static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 					  const struct sk_buff *skb)
 {
@@ -3655,6 +3657,7 @@ static void tcp_update_rtt_min(struct sock *sk, u32 rtt_us, const int flag)
 			   rtt_us ? : jiffies_to_usecs(1));
 }
 
+/* 收到ACK后，更新rtt的函数 */
 static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 			       long seq_rtt_us, long sack_rtt_us,
 			       long ca_rtt_us, struct rate_sample *rs)

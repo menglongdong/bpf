@@ -914,6 +914,10 @@ struct sk_buff {
 	struct sock		*sk;
 
 	union {
+		/* skb上的时间戳信息。对于发包来说，这个时间戳会在对应的协议层给打上，
+		 * 比如对于TCP协议，就会在__tcp_transmit_skb函数中调用
+		 * skb_set_delivery_time给打上。
+		 */
 		ktime_t		tstamp;
 		u64		skb_mstamp_ns; /* earliest departure time */
 	};

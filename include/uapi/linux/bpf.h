@@ -6350,6 +6350,7 @@ struct __sk_buff {
 	__u32 cb[5];
 	__u32 hash;
 	__u32 tc_classid;
+	/* 有效的现行数据范围：[data, data_end)，即data_end不是有效数据 */
 	__u32 data;
 	__u32 data_end;
 	__u32 napi_id;

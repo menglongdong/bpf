@@ -96,6 +96,9 @@ struct dst_entry {
 	 * frequently accessed members of rtable and rt6_info out of the
 	 * __rcuref cache line.
 	 */
+	/* 对于创建出来的没有进行缓存的路由缓存，会将其加入到uncached链表中，但是不会
+	 * 增加其引用。在dst释放的时候，会自动将其从链表中移除，作用类似于进行trace。
+	 */
 	struct list_head	rt_uncached;
 	struct uncached_list	*rt_uncached_list;
 #ifdef CONFIG_64BIT

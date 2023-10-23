@@ -284,6 +284,9 @@ struct tcp_sock {
 	u32	lsndtime;	/* timestamp of last sent data packet (for restart window) */
 	u32	mdev_us;	/* medium deviation			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
+	/* 这个看样子和tcp_mstamp是一致的哦，只不过这个针对的是发送报文的，这个时间会
+	 * 在发送报文的时候被更新，并设置到发送报文里面。
+	 */
 	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
 	u64	accecn_opt_tstamp;	/* Last AccECN option sent timestamp */
 	struct list_head tsorted_sent_queue; /* time-sorted sent but un-SACKed skbs */
