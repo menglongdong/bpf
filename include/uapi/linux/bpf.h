@@ -1295,6 +1295,21 @@ enum bpf_perf_event_type {
  * Such programs are allowed to use helpers that may sleep like
  * bpf_copy_from_user().
  */
+/* 可睡眠的BPF程序在加载过程中会进行额外的检查，包括以下几方面：
+ * 1. 只能使用一定范围内的MAP类型
+ * 2. 在bpf_check_attach_target中会对BPF的attach类型进行检查。如果是基于TRACING
+ * 的类型，那么在以下场景下允许sleep：
+ *    （1）被trace的函数有ALLOW_ERROR_INJECTION的标志
+ *    （2）被trace的函数有KF_SLEEPABLE的标志
+ *    （3）LSM的钩子点可睡眠
+ * 其他的都是不允许睡眠的。
+ *
+ * 只有以下这些BPF类型是允许sleep的：
+ *   fentry/fexit/fmod_ret, lsm, iter, uprobe, struct_ops
+ *
+ * 每个helper函数在定义的时候都会标识其是否会睡眠，对于sleepable的helper函数，
+ * 只能在sleepable的BPF程序中进行调用。
+ */
 #define BPF_F_SLEEPABLE		(1U << 4)
 
 /* If BPF_F_XDP_HAS_FRAGS is used in BPF_PROG_LOAD command, the loaded program
