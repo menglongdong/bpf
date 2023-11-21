@@ -13,6 +13,7 @@
 
 struct tnum {
 	u64 value;
+	/* mask为0代表是个常量；mask为-1，代表是unknow的 */
 	u64 mask;
 };
 
@@ -81,6 +82,7 @@ static inline bool tnum_equals_const(struct tnum a, u64 b)
 }
 
 /* Returns true if @a is completely unknown */
+/* 检查一个tnum是否是完全unknow。。。如果能知道范围，就不算是unknow的 */
 static inline bool tnum_is_unknown(struct tnum a)
 {
 	return !~a.mask;

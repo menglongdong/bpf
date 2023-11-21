@@ -179,6 +179,9 @@ static bool bpf_global_percpu_ma_set;
  */
 
 /* verifier_state + insn_idx are pushed to stack when branch is encountered */
+/* 这个结构体是用来跟踪分支的，每遇到一个分支，就会创建一个elem保存起来。这里记录了分支
+ * 的一些情况，包括当前产生分支的指令等。
+ */
 struct bpf_verifier_stack_elem {
 	/* verifier state is 'st'
 	 * before processing instruction 'insn_idx'
@@ -2219,6 +2222,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
+	/* 这个代码是将imm存储到var_off的低32位中 */
 	reg->var_off = tnum_const_subreg(reg->var_off, imm);
 	reg->s32_min_value = (s32)imm;
 	reg->s32_max_value = (s32)imm;
@@ -10715,6 +10719,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	struct bpf_func_state *caller, *callee;
 	int err;
 
+	/* 检查器走到了call subprog的逻辑。这里会 */
+
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
@@ -10730,6 +10736,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
 	if (!callee)
 		return -ENOMEM;
+	/* 为当前subprog分配新的栈帧 */
 	state->frame[state->curframe + 1] = callee;
 
 	/* callee cannot access r0, r6 - r9 for reading and has to write
@@ -10968,6 +10975,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 
 	caller = state->frame[state->curframe];
+	/* 检查目标函数的原型和当前调用的参数类型是否匹配 */
 	err = btf_check_subprog_call(env, subprog, caller->regs);
 	if (err == -EFAULT)
 		return err;
@@ -17587,6 +17595,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		if (err)
 			return err;
 
+		/* pkt类型的指针不能和非pkt类型的数据类型进行比较 */
 		src_reg = &regs[insn->src_reg];
 		if (!(reg_is_pkt_pointer_any(dst_reg) && reg_is_pkt_pointer_any(src_reg)) &&
 		    is_pointer_value(env, insn->src_reg)) {
@@ -17679,11 +17688,18 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
-	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
-	if (IS_ERR(other_branch))
-		return PTR_ERR(other_branch);
-	other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
+		/* pred为0或1时不会分叉；到这里表示需要压栈另一条分支。 */
+		other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
+		if (IS_ERR(other_branch))
+			return PTR_ERR(other_branch);
+		other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
 
+	/* 根据比较的逻辑来进一步推断（设置）寄存器的范围。例如：
+	 *   if (a > 100)
+	 *       //这条路径里a的min就是101
+	 *   else
+	 *       //这条路径里面a的max就是100
+	 */
 	if (BPF_SRC(insn->code) == BPF_X) {
 		err = reg_set_min_max(env,
 				      &other_branch_regs[insn->dst_reg],

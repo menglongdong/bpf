@@ -240,6 +240,7 @@ struct tnum tnum_subreg(struct tnum a)
 	return tnum_cast(a, 4);
 }
 
+/* 将tnum类型的变量a的低32位清空 */
 struct tnum tnum_clear_subreg(struct tnum a)
 {
 	return tnum_lshift(tnum_rshift(a, 32), 32);
@@ -250,6 +251,7 @@ struct tnum tnum_with_subreg(struct tnum reg, struct tnum subreg)
 	return tnum_or(tnum_clear_subreg(reg), tnum_subreg(subreg));
 }
 
+/* 将32位的变量value存储到a的低32位中 */
 struct tnum tnum_const_subreg(struct tnum a, u32 value)
 {
 	return tnum_with_subreg(a, tnum_const(value));

@@ -65,6 +65,7 @@ struct btf_type {
 	 * FUNC, FUNC_PROTO 或者 VAR，那么type会被使用。这时，type代表的是当前
 	 * 类型所关联的类型的id。比如当前类型是个“int *”（指针），那么type存储的
 	 * 就是类型int的BTF的id。
+	 */
 	union {
 		__u32 size;
 		__u32 type;

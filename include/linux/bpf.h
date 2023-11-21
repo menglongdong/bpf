@@ -2257,6 +2257,16 @@ struct bpf_array {
  */
 int bpf_array_get_next_key(struct bpf_map *map, void *key, void *next_key);
 
+/* 检查器所检查的指令数量的上限值。这里说的指令数量并不是BPF程序编译后的指令，也
+ * 不是实际会运行到的指令数量，而是检查器所检查的指令数量。
+ *
+ * 对于BPF程序中存在jmp指令（或者loop）的情况，检查器会检查所有的代码分支的指令，
+ * 而这里限制的就是所有的branches的涵盖的指令上限。因此对于逻辑稍微复杂的BPF程序
+ * （存在不可控loop，即不能完全确定实际loop的次数），很容易就会发生指令达到上限
+ * 的情况。
+ *
+ * 这里，感觉我们需要一种机制，能够限制BPF程序逻辑指令上限，而不是检查器指令上限。
+ */
 #define BPF_COMPLEXITY_LIMIT_INSNS      1000000 /* yes. 1M insns */
 #define MAX_TAIL_CALL_CNT 33
 

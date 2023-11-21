@@ -271,6 +271,7 @@ struct bpf_retval_range {
 /* state of the program:
  * type of all registers and stack info
  */
+/* 这个结构体代表了一个栈帧 */
 struct bpf_func_state {
 	struct bpf_reg_state regs[MAX_BPF_REG];
 	/* index of call instruction that called into this func */
@@ -361,6 +362,7 @@ struct bpf_jmp_history_entry {
 #define BPF_ID_MAP_SIZE ((MAX_BPF_REG + MAX_BPF_STACK / BPF_REG_SIZE) * MAX_CALL_FRAMES)
 struct bpf_verifier_state {
 	/* call stack tracking */
+	/* 栈帧。从这里可以看出来，BPF程序里面最多只能进行8层的函数调用 */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
 	struct bpf_verifier_state *parent;
 	/* Acquired reference states */
@@ -412,6 +414,7 @@ struct bpf_verifier_state {
 	 */
 	u32 branches;
 	u32 insn_idx;
+	/* 当前栈帧，针对存在subprog的情况 */
 	u32 curframe;
 
 	u32 acquired_refs;
@@ -752,6 +755,7 @@ struct bpf_verifier_env {
 	const struct bpf_verifier_ops *ops;
 	struct module *attach_btf_mod;	/* The owner module of prog->aux->attach_btf */
 	struct bpf_verifier_stack_elem *head; /* stack of verifier states to be processed */
+	/* 分支的数量，即跳转的次数 */
 	int stack_size;			/* number of states to be processed */
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	bool test_state_freq;		/* test verifier with different pruning frequency */

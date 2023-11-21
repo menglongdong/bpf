@@ -47,6 +47,7 @@
 #define		BPF_JGE		0x30
 #define		BPF_JSET        0x40
 #define BPF_SRC(code)   ((code) & 0x08)
+/* 指令中源操作数的类型，K代表是32位的立即数，X代表来自寄存器 */
 #define		BPF_K		0x00
 #define		BPF_X		0x08
 
