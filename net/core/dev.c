@@ -4795,7 +4795,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	skb_reset_mac_header(skb);
 	skb_assert_len(skb);
 
-	/* 是否在报文调度期间生成软件时间戳 */
+	/* 是否在报文调度期间将报文的时间戳信息发送给用户态 */
 	if (unlikely(skb_shinfo(skb)->tx_flags &
 		     (SKBTX_SCHED_TSTAMP | SKBTX_BPF)))
 		__skb_tstamp_tx(skb, NULL, NULL, skb->sk, SCM_TSTAMP_SCHED);

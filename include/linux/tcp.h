@@ -315,7 +315,7 @@ struct tcp_sock {
 		prev_ecnfield:2; /* ECN bits from the previous segment */
 	__be32	pred_flags;
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
-	/* 最近一次收到或者发送报文的时间戳，约等于当前时间 */
+	/* 最近一次收到或者发送报文的时间戳，约等于当前时间，它的单位是us */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	/* 下一个要接收的数据 */
 	u32	rcv_nxt;	/* What we want to receive next		*/

@@ -5711,6 +5711,10 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 	bool tsonly, opt_stats = false;
 	u32 tsflags;
 
+	/* 这个函数用于将已经被确认的报文的时间戳信息放回给用户态程序。tsonly代表只
+	 * 返回ts信息，不携带原始数据。
+	 */
+
 	if (!sk)
 		return;
 

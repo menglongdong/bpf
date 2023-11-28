@@ -2662,6 +2662,11 @@ static inline s64 tcp_rto_delta_us(const struct sock *sk)
 	const struct sk_buff *skb = tcp_rtx_queue_head(sk);
 	u32 rto = inet_csk(sk)->icsk_rto;
 
+	/* 重新计算当前套接口的RTO定时器超时时间。可以看出来，这里是取的rto减去第一个
+	 * skb距离当前的时间戳。因此，出发RTO定时器的时候，并不是当前的时间+rto，而是
+	 * skb->ts + rto.
+	 */
+
 	if (likely(skb)) {
 		u64 rto_time_stamp_us = tcp_skb_timestamp_us(skb) + jiffies_to_usecs(rto);
 

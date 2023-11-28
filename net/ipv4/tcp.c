@@ -3009,6 +3009,9 @@ skip_copy:
 			tcp_fast_path_check(sk);
 		}
 
+		/* 获取被接收的报文的ts。如果当前套接口设置了SOCK_RCVTSTAMPNS选项，
+		 * 那么这个信息是会被放到msg中一并传递给用户态的。
+		 */
 		if (TCP_SKB_CB(skb)->has_rxtstamp) {
 			tcp_update_recv_tstamps(skb, tss);
 			*cmsg_flags |= TCP_CMSG_TS;

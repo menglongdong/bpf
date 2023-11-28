@@ -3691,6 +3691,7 @@ static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 	 * values will be skipped with the seq_rtt_us < 0 check above.
 	 */
 	tcp_update_rtt_min(sk, ca_rtt_us, flag);
+	/* 利用当前ACK报文确认的第一个skb的时间戳来更新rtt */
 	tcp_rtt_estimator(sk, seq_rtt_us);
 	tcp_set_rto(sk);
 
@@ -3870,7 +3871,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 		} else if (!(sacked & TCPCB_SACKED_ACKED)) {
 			/* first_ackt和last_ackt分别是当前rtx队列中第一个被
 			 * 确认的和最后一个被确认的skb的时间戳（不包括被sacked
-			 * 的报文。
+			 * 的报文）。这里的时间戳是报文最后一次被发送（重传）的时间戳
 			 */
 			last_ackt = tcp_skb_timestamp_us(skb);
 			WARN_ON_ONCE(last_ackt == 0);
