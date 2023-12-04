@@ -3777,6 +3777,7 @@ static u32 tcp_tso_acked(struct sock *sk, struct sk_buff *skb)
 	BUG_ON(!after(TCP_SKB_CB(skb)->end_seq, tp->snd_una));
 
 	packets_acked = tcp_skb_pcount(skb);
+	/* 移除/释放已经被确认的部分的数据 */
 	if (tcp_trim_head(sk, skb, tp->snd_una - TCP_SKB_CB(skb)->seq))
 		return 0;
 	packets_acked -= tcp_skb_pcount(skb);
@@ -3852,10 +3853,19 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 
 		/* Determine how many packets and what bytes were acked, tso and else */
 		if (after(scb->end_seq, tp->snd_una)) {
+			/* 取出第一个报文，如果整个报文的数据段都在tp->snd_una之后，
+			 * 那么不需要再进行后面的操作了。否则，说明当前这个报文被
+			 * 不分ACK了。
+			 */
 			if (tcp_skb_pcount(skb) == 1 ||
 			    !after(tp->snd_una, scb->seq))
 				break;
 
+			/* 这里可以看出来，如果只是part ack，且那个skb段的数据没有
+			 * 被完全ack，那么这个skb不会被释放，后面的拥塞逻辑都不会
+			 * 走到，只是单纯的释放了一部分数据而已。这种情况下，不认为
+			 * FLAG_DATA_ACKED？这里了有点不对劲啊。
+			 */
 			acked_pcount = tcp_tso_acked(sk, skb);
 			if (!acked_pcount)
 				break;

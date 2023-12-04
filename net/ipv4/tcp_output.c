@@ -670,6 +670,8 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 	__be32 *ptr = (__be32 *)(th + 1);
 	u16 options = opts->options;	/* mungable copy */
 
+	/* 从这里可以看出来，TCP的每个option都会4字节对齐，不足4字节的会补上nop */
+
 	if (tcp_key_is_md5(key)) {
 		*ptr++ = htonl((TCPOPT_NOP << 24) | (TCPOPT_NOP << 16) |
 			       (TCPOPT_MD5SIG << 8) | TCPOLEN_MD5SIG);
