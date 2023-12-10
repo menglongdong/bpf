@@ -2793,6 +2793,7 @@ static void __reg_bound_offset(struct bpf_reg_state *reg)
 static void reg_bounds_sync(struct bpf_reg_state *reg)
 {
 	/* We might have learned new bounds from the var_off. */
+	/* 根据当前的tnum来更新reg的范围 */
 	__update_reg_bounds(reg);
 	/* We might have learned something about the sign bit. */
 	__reg_deduce_bounds(reg);
@@ -11816,7 +11817,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		env->insn_aux_data[insn_idx].non_sleepable = true;
 
 	meta.func_id = func_id;
-	/* check args */
+	/* 挨个对helper函数的参数进行检查，包括参数类型等。如果参数是PTR_TO_MAP
+	 * 类型的，那么会将map的指针提取出来存放到meta中。
+	 */
 	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
 		err = check_func_arg(env, i, &meta, fn, insn_idx);
 		if (err)
@@ -17059,6 +17062,7 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 
 	switch (opcode) {
 	case BPF_JEQ:
+		/* 取两个寄存器相交的部分，并将状态更新到两个寄存器中。 */
 		if (is_jmp32) {
 			reg1->u32_min_value = max(reg1->u32_min_value, reg2->u32_min_value);
 			reg1->u32_max_value = min(reg1->u32_max_value, reg2->u32_max_value);
@@ -17223,6 +17227,12 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 {
 	int err;
 
+	/* 根据当前的检查逻辑来设置当前寄存器的状态，即min/max/value等。这里的
+	 * 四个寄存器分别代表着两个branch的src和dst寄存器。这里的true和false
+	 * 代表着jump的逻辑判断条件是true还是false,如果是true的话就要走jump的
+	 * 逻辑了。
+	 */
+
 	/* If either register is a pointer, we can't learn anything about its
 	 * variable offset from the compare (unless they were a pointer into
 	 * the same object, but we don't bother with that).
@@ -17238,7 +17248,11 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 		return 0;
 
 	/* fallthrough (FALSE) branch */
+	/* 将false逻辑的指令转为true,然后根据转换之后的信息来设置寄存器的range。
+	 * 这里做这个转换是因为regs_refine_cond_op()函数只处理true路径的逻辑。
+	 */
 	regs_refine_cond_op(false_reg1, false_reg2, rev_opcode(opcode), is_jmp32);
+	/* 根据寄存器上的信息，进行状态同步 */
 	reg_bounds_sync(false_reg1);
 	reg_bounds_sync(false_reg2);
 
@@ -17613,6 +17627,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			verbose(env, "BPF_JMP/JMP32 uses reserved fields\n");
 			return -EINVAL;
 		}
+		/* 这里是为了统一下面的代码规范。如果是BPF_K,假装src reg是一个
+		 * 已知的scalar.
+		 */
 		src_reg = &env->fake_reg[0];
 		memset(src_reg, 0, sizeof(*src_reg));
 		src_reg->type = SCALAR_VALUE;

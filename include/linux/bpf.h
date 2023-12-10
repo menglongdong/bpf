@@ -2267,7 +2267,7 @@ int bpf_array_get_next_key(struct bpf_map *map, void *key, void *next_key);
  *
  * 这里，感觉我们需要一种机制，能够限制BPF程序逻辑指令上限，而不是检查器指令上限。
  */
-#define BPF_COMPLEXITY_LIMIT_INSNS      1000000 /* yes. 1M insns */
+#define BPF_COMPLEXITY_LIMIT_INSNS      5000000 /* yes. 1M insns */
 #define MAX_TAIL_CALL_CNT 33
 
 /* Maximum number of loops for bpf_loop and bpf_iter_num.

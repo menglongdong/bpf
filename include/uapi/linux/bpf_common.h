@@ -45,6 +45,7 @@
 #define		BPF_JEQ		0x10
 #define		BPF_JGT		0x20
 #define		BPF_JGE		0x30
+/* PC += offset if dst & src */
 #define		BPF_JSET        0x40
 #define BPF_SRC(code)   ((code) & 0x08)
 /* 指令中源操作数的类型，K代表是32位的立即数，X代表来自寄存器 */

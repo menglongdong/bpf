@@ -175,6 +175,10 @@ struct tnum tnum_intersect(struct tnum a, struct tnum b)
 {
 	u64 v, mu;
 
+	/* 取两个tnum相交的部分。如果一个是unknow,一个是known,那么相交的部分就是
+	 * 那个known，前提是known在unknow的mask范围内。
+	 */
+
 	v = a.value | b.value;
 	mu = a.mask & b.mask;
 	return TNUM(v & ~mu, mu);
