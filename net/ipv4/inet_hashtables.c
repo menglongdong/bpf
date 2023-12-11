@@ -1089,6 +1089,9 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 
 	if (port) {
 		local_bh_disable();
+		/* 如果connect之前已经绑定了port，那么进行检查的时候就相当于强制
+		 * 开启了tw套接口重用功能，会直接释放冲突的tw套接口（如果存在的话）。
+		 */
 		ret = check_established(death_row, sk, port, NULL, false,
 					hash_port0 + port);
 		local_bh_enable();
@@ -1172,6 +1175,9 @@ other_parity_scan:
 				/* 端口和地址重用都没有打开，因此只需要检查四元组
 				 * 是否冲突。这种情况下，是允许当前端口存在listen
 				 * 套接口的。
+				 *
+				 * 同时如果开启了tw_reuse，那么这里会不认为和tw
+				 * 套接口产生了冲突的。
 				 */
 				if (!check_established(death_row, sk,
 						       port, &tw, false,

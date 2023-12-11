@@ -3192,6 +3192,7 @@ static void tcp_try_to_open(struct sock *sk, int flag)
 	}
 }
 
+/* 每次PMTU探测失败，都会将当前搜索的MTU MAX进行减一操作。 */
 static void tcp_mtup_probe_failed(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3209,7 +3210,9 @@ static void tcp_mtup_probe_success(struct sock *sk)
 
 	tp->prior_ssthresh = tcp_current_ssthresh(sk);
 
+	/* 根据当前的MSS计算出来MTU，从而计算拥塞窗口的byte大小 */
 	val = (u64)tcp_snd_cwnd(tp) * tcp_mss_to_mtu(sk, tp->mss_cache);
+	/* 根据新的MTU，再反向计算当前的拥塞窗口大小。 */
 	do_div(val, icsk->icsk_mtup.probe_size);
 	DEBUG_NET_WARN_ON_ONCE((u32)val != val);
 	tcp_snd_cwnd_set(tp, max_t(u32, 1U, val));
@@ -3218,6 +3221,7 @@ static void tcp_mtup_probe_success(struct sock *sk)
 	tp->snd_cwnd_stamp = tcp_jiffies32;
 	tp->snd_ssthresh = tcp_current_ssthresh(sk);
 
+	/* probe成功后，将当前MTU MIN设置为当前probe出来的尺寸。 */
 	icsk->icsk_mtup.search_low = icsk->icsk_mtup.probe_size;
 	icsk->icsk_mtup.probe_size = 0;
 	tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
