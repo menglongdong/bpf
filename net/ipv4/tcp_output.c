@@ -2078,14 +2078,30 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	int mss_now;
 
+	/* search_high/search_low是TCP侧的PMTU功能，它会在这个范围内设置MSS，用来
+	 * 探测最大可用的MTU。
+	 */
 	if (icsk->icsk_mtup.search_high > pmtu)
 		icsk->icsk_mtup.search_high = pmtu;
 
 	mss_now = tcp_mtu_to_mss(sk, pmtu);
+	/* 这里是为了防止窗口过小的情况，即TCP收包窗口小于2倍的mss，就会以窗口大小为准 */
 	mss_now = tcp_bound_to_half_wnd(tp, mss_now);
 
 	/* And store cached results */
 	icsk->icsk_pmtu_cookie = pmtu;
+	/* 在sysctl_tcp_mtu_probing设置为2的时候，这里会为1，即强制启用TCP层的MTU
+	 * 探测功能。从这里可以看出来，TCP层的MTU探测是可选的，默认情况下ICMP的MTU
+	 * 探测就能更新路由和套接口上的MSS信息。
+	 *
+	 * 当重传次数大于tcp_retries1的时候，TCP的MTU探测功能会自动启动（在
+	 * sysctl_tcp_mtu_probing为1的情况下）。但是，probe的动作只会在拥塞控制正常
+	 * 的情况下才会执行，这个可以参照tcp_mtu_probe函数的实现。
+	 *
+	 * 这里还可以看出来，即使没有ICMP的支持，TCP也能一定程度上进行MTU的探测。这里
+	 * 就是单纯的靠是否产生了丢包来进行二分探测了，算是一种慢速路径。但是这种方式
+	 * 探测到的结果，不会持久化到路由上，只能算是临时生效。
+	 */
 	if (icsk->icsk_mtup.enabled)
 		mss_now = min(mss_now, tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_low));
 	tp->mss_cache = mss_now;
@@ -2109,6 +2125,9 @@ unsigned int tcp_current_mss(struct sock *sk)
 	mss_now = tp->mss_cache;
 
 	if (dst) {
+		/* 这里可以看出来，TCP协议层会实时地将dst上面的MTU信息同步到当前
+		 * sk上面。
+		 */
 		u32 mtu = dst_mtu(dst);
 		if (mtu != inet_csk(sk)->icsk_pmtu_cookie)
 			mss_now = tcp_sync_mss(sk, mtu);
@@ -2720,6 +2739,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	 * smaller than a threshold, backoff from probing.
 	 */
 	mss_now = tcp_current_mss(sk);
+	/* 进行MTU的探测。这里是采用二分法进行探测的，即MTU取high和low的平均值。 */
 	probe_size = tcp_mtu_to_mss(sk, (icsk->icsk_mtup.search_high +
 				    icsk->icsk_mtup.search_low) >> 1);
 	size_needed = probe_size + (tp->reordering + 1) * tp->mss_cache;
@@ -2802,6 +2822,8 @@ static int tcp_mtu_probe(struct sock *sk)
 			break;
 	}
 	tcp_init_tso_segs(nskb, nskb->len);
+
+	/* 上面的代码都是构造一个长度为probe_size的报文，并设置DF标志，然后把它发送出去 */
 
 	/* We're ready to send.  If this fails, the probe will
 	 * be resegmented into mss-sized pieces by tcp_write_xmit().

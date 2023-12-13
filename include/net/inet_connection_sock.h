@@ -94,6 +94,7 @@ struct inet_connection_sock {
 	__u32                     icsk_rto_min;
 	u32			  icsk_rto_max;
 	__u32                     icsk_delack_max;
+	/* 上一次探测出来的PMTU，初始值取的是dst上面的MTU数据 */
 	__u32			  icsk_pmtu_cookie;
 	const struct tcp_congestion_ops *icsk_ca_ops;
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
@@ -129,8 +130,11 @@ struct inet_connection_sock {
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */
 	} icsk_ack;
 	struct {
-		/* Range of MTUs to search */
+		/* PMTU探测的上限值，初始值是根据mss_clamp计算出来的，意味着PMTU探测
+		 * 不会超过mss_clamp。
+		 */
 		int		  search_high;
+		/* PMTU探测的下线，初始值取的sysctl_tcp_base_mss */
 		int		  search_low;
 
 		/* Information on the current probe. */

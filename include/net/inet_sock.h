@@ -242,6 +242,9 @@ struct inet_sock {
 	__u8			tos;
 	__u8			min_ttl;
 	__u8			mc_ttl;
+	/* 根据sysctl_ip_no_pmtu_disc的配置不同，这里会被初始化为
+	 * IP_PMTUDISC_WANT或者IP_PMTUDISC_DONT
+	 */
 	__u8			pmtudisc;
 	__u8			rcv_tos;
 	__u8			convert_csum;

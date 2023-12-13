@@ -1100,6 +1100,7 @@ static enum skb_drop_reason icmp_unreach(struct sk_buff *skb)
 	struct net *net;
 	u32 info = 0;
 
+	/* 对于主机不可达、MTU过小等错误ICMP，会继续做四元组相关解析和分发。 */
 	net = skb_dst_dev_net_rcu(skb);
 
 	/*
@@ -1465,6 +1466,7 @@ int icmp_rcv(struct sk_buff *skb)
 	if (skb_checksum_simple_validate(skb))
 		goto csum_error;
 
+	/* 将data指针移动到icmp的数据区域 */
 	if (!pskb_pull(skb, sizeof(*icmph)))
 		goto error;
 

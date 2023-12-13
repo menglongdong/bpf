@@ -3278,6 +3278,7 @@ void tcp_simple_retransmit(struct sock *sk)
 	else
 		mss = tcp_current_mss(sk);
 
+	/* 将所有的段的长度大于新的mss的报文都标记为丢包 */
 	skb_rbtree_walk(skb, &sk->tcp_rtx_queue) {
 		if (tcp_skb_seglen(skb) > mss)
 			tcp_mark_skb_lost(sk, skb);
@@ -3291,10 +3292,12 @@ void tcp_simple_retransmit(struct sock *sk)
 
 	tcp_verify_left_out(tp);
 
-	/* Don't muck with the congestion window here.
-	 * Reason is that we do not increase amount of _data_
-	 * in network, but units changed and effective
-	 * cwnd/ssthresh really reduced now.
+	/* 这里认为，由于是MTU变小而导致的cwnd缩小，但是在网络中的数据个数是没有变的，
+	 * 因此不需要影响拥塞窗口，即这里的拥塞窗口和慢启动阈值还都是有效的。
+	 *
+	 * 这里进行报文的重传依然受拥塞窗口的限制，即如果拥塞窗口不允许的话，会重传不
+	 * 成功。这种情况下，需要等待重传定时器超时后，进行重传。后面的情况就会走普通
+	 * 的loss状态机的流程，即直到恢复点，才会恢复到OPEN的拥塞控制状态。
 	 */
 	tcp_non_congestion_loss_retransmit(sk);
 }
@@ -3626,7 +3629,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 
 		/*
 		 * 检查是否是由于PMTU检测失败造成的recover状态，如果是的话，则不减小
-		 * 拥塞窗口。
+		 * 拥塞窗口。这种情况下，不进入到recover状态，而是直接重传报文。
 		 */
 		if (icsk->icsk_ca_state < TCP_CA_CWR &&
 		    icsk->icsk_mtup.probe_size &&
@@ -3634,6 +3637,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 			tcp_mtup_probe_failed(sk);
 			/* Restores the reduction we did in tcp_mtup_probe() */
 			tcp_snd_cwnd_set(tp, tcp_snd_cwnd(tp) + 1);
+			/* PMTU探测失败，进行快速重传 */
 			tcp_simple_retransmit(sk);
 			return;
 		}
@@ -3982,6 +3986,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 
 	if (flag & FLAG_ACKED) {
 		flag |= FLAG_SET_XMIT_TIMER;  /* set TLP or RTO timer */
+		/* 重传队列中PMTU的报文被成功确认了，进行probe成功的处理。 */
 		if (unlikely(icsk->icsk_mtup.probe_size &&
 			     !after(tp->mtu_probe.probe_seq_end, tp->snd_una))) {
 			tcp_mtup_probe_success(sk);

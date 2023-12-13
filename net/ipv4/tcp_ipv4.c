@@ -402,6 +402,10 @@ void tcp_v4_mtu_reduced(struct sock *sk)
 	struct dst_entry *dst;
 	u32 mtu, dmtu;
 
+	/* 收到FRAME_NEEDED类型的ICMP报文后，会调用这个函数。这个函数会取出pmtu上面
+	 * 探测到的MTU信息，并用来更新当前sk对应的路由缓存信息。
+	 */
+
 	if ((1 << sk->sk_state) & (TCPF_LISTEN | TCPF_CLOSE))
 		return;
 	mtu = READ_ONCE(tcp_sk(sk)->mtu_info);

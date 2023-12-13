@@ -118,6 +118,15 @@ static __always_inline void csum_replace_by_diff(__sum16 *sum, __wsum diff)
 
 static __always_inline void csum_replace4(__sum16 *sum, __be32 from, __be32 to)
 {
+	/* 这里先取反，得到的就是原始的累加值。然后按照32位减去from,再加上to,
+	 * 最后再折叠为16位。
+	 *
+	 * 这里的减操作其实就是加上from取反。csum_add加的时候会判断有没有溢出
+	 * （加完之后的结果比其中一个小），溢出的话就+1。
+	 *
+	 * 最后的csum_fold会将32位转为16位，基本操作是将高16位加到低16位上，
+	 * 溢出了的话就再加1。
+	 */
 	__wsum tmp = csum_sub(~csum_unfold(*sum), (__force __wsum)from);
 
 	*sum = csum_fold(csum_add(tmp, (__force __wsum)to));

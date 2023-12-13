@@ -1688,6 +1688,9 @@ struct dst_entry *inet_csk_update_pmtu(struct sock *sk, u32 mtu)
 		if (!dst)
 			goto out;
 	}
+	/* 对于ipv4，这里会调用 ip_rt_update_pmtu 函数来更新rt上的mtu信息。只有
+	 * 这里的pmtu比原来的mtu大的情况下，才会进行更新操作。
+	 */
 	dst->ops->update_pmtu(dst, sk, NULL, mtu, true);
 
 	dst = __sk_dst_check(sk, 0);

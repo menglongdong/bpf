@@ -2896,6 +2896,9 @@ static inline bool pskb_may_pull(struct sk_buff *skb, unsigned int len)
 	return pskb_may_pull_reason(skb, len) == SKB_NOT_DROPPED_YET;
 }
 
+/* 这个pull看样子是移动data指针。。。和skb_pull有啥区别呢？skb_pull只是单纯的
+ * 移动指针，而这里还涉及到线性区开阔的操作？
+ */
 static inline void *pskb_pull(struct sk_buff *skb, unsigned int len)
 {
 	if (!pskb_may_pull(skb, len))

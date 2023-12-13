@@ -126,7 +126,9 @@ struct tcp_options_received {
 		saw_unknown:1,	/* Received unknown option		*/
 		unused:1;
 	u8	num_sacks;	/* Number of SACK blocks		*/
+	/* 用户通过ioctl主动设定的MSS */
 	u16	user_mss;	/* mss requested by user in ioctl	*/
+	/* TCP三次握手期间协商出来的MSS */
 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
 };
 
@@ -224,6 +226,7 @@ struct tcp_sock {
 	u32	tsoffset;	/* timestamp offset */
 	/* 发送窗口大小（SYN协商出来的那个）。 */
 	u32	snd_wnd;	/* The window we expect to receive	*/
+	/* 当前生效的MSS，不会超过 mss_clamp 的大小 */
 	u32	mss_cache;	/* Cached effective mss, not including SACKS */
 	u32	snd_cwnd;	/* Sending congestion window		*/
 	/* 拥塞状态下，所有发送出去的数据，包括重传的数据。 */
