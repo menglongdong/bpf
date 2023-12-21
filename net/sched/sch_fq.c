@@ -30,6 +30,11 @@
  *  or SLAB cache will reuse socket for another flow)
  */
 
+/* 这个是基于流的qdisc，即可以对某个流（连接）进行限速。这个qdisc会把所有的流都维护到
+ * 一个哈希表中。如果流没有对应的sk（比如转发的流），那么会使用skb上的rxhash来作为流
+ * 的哈希值进行哈希。
+ */
+
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
