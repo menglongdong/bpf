@@ -2697,8 +2697,15 @@ static inline int udp4_csum_init(struct sk_buff *skb, struct udphdr *uh,
 		}
 	}
 
-	/* Note, we are only interested in != 0 or == 0, thus the
-	 * force to int.
+	/* 如果当前skb的csum是CHECKSUM_COMPLETE，那么就计算校验和是否正确（相加
+	 * 为0）；如果报文长度比较小，那么直接计算并验证是否正确。这个只有在软件计算
+	 * csum校验不通过的时候才会返回error，硬件csum不认为是失败。
+	 * 
+	 * 这里可以看出来，对于UDP而言，skb->csum是包含了udp->check的。这导致，
+	 * skb->csum + pcsum(伪首部csum) = 0
+	 * 
+	 * 如果check是0的话，那么不会进行csum的验证，而是直接将skb->csum_valid设置
+	 * 为1。
 	 */
 	err = (__force int)skb_checksum_init_zero_check(skb, proto, uh->check,
 							inet_compute_pseudo);
@@ -2728,6 +2735,11 @@ static int udp_unicast_rcv_skb(struct sock *sk, struct sk_buff *skb,
 {
 	int ret;
 
+	/* 对于UDP隧道，这里会进行csum的convert。所谓的convert，就是外层已经验证
+	 * 了csum的正确性（软件做的），那么这个时候就可以将伪首部作为skb->csum，来
+	 * 模拟硬件csum，并将ip_summed设置为CHECKSUM_COMPLETE。这样，
+	 * 里面的内层协议就不用计算了。
+	 */
 	if (inet_get_convert_csum(sk) && uh->check && !IS_UDPLITE(sk))
 		skb_checksum_try_convert(skb, IPPROTO_UDP, inet_compute_pseudo);
 

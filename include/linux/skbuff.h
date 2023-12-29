@@ -604,6 +604,7 @@ struct skb_shared_info {
 	unsigned short	gso_size;
 	/* Warning: this field is not always filled in (UFO)! */
 	unsigned short	gso_segs;
+	/* skb链表，一般用于IP分片 */
 	struct sk_buff	*frag_list;
 	union {
 		struct skb_shared_hwtstamps hwtstamps;
@@ -1021,6 +1022,7 @@ struct sk_buff {
 	/* Indicates the inner headers are valid in the skbuff. */
 	__u8			encapsulation:1;
 	__u8			encap_hdr_csum:1;
+	/* 如果是COMPLETE模式，那么在校验通过（init）后会将这个属性设置为true */
 	__u8			csum_valid:1;
 #ifdef CONFIG_IPV6_NDISC_NODETYPE
 	__u8			ndisc_nodetype:2;
@@ -4045,6 +4047,9 @@ static inline int skb_linearize_cow(struct sk_buff *skb)
 	       __skb_linearize(skb) : 0;
 }
 
+/* 从当前skb的校验和中减去指定部分的数据的校验和。一般在修改数据的时候，先调用这个，改完
+ * 数据后再调用下面那个，就完成了offload模式下校验和的变更。
+ */
 static __always_inline void
 __skb_postpull_rcsum(struct sk_buff *skb, const void *start, unsigned int len,
 		     unsigned int off)
@@ -4054,6 +4059,9 @@ __skb_postpull_rcsum(struct sk_buff *skb, const void *start, unsigned int len,
 					   csum_partial(start, len, 0), off);
 	else if (skb->ip_summed == CHECKSUM_PARTIAL &&
 		 skb_checksum_start_offset(skb) < 0)
+		/* 如果当前修改的数据的范围在csum范围内，那么不需要做任何处理，
+		 * 因为offload的时候会重新计算这部分数据；否则，
+		 */
 		skb->ip_summed = CHECKSUM_NONE;
 }
 
@@ -4067,6 +4075,7 @@ __skb_postpull_rcsum(struct sk_buff *skb, const void *start, unsigned int len,
  *	update the CHECKSUM_COMPLETE checksum, or set ip_summed to
  *	CHECKSUM_NONE so that it can be recomputed from scratch.
  */
+/* 当前skb的校验和中加上指定部分的数据的校验和 */
 static inline void skb_postpull_rcsum(struct sk_buff *skb,
 				      const void *start, unsigned int len)
 {

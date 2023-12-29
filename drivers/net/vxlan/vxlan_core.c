@@ -1656,6 +1656,10 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	__be32 vni = 0;
 	int nh;
 
+	/* 麻痹，这里的VXLAN_HLEN指的不是VXLAN的头部长度，而是UDP+VXLAN头部的长度。
+	 * 所以默认UDP头部包含在了VXLAN头部内是吗？
+	 */
+
 	/* Need UDP and VXLAN header to be present */
 	reason = pskb_may_pull_reason(skb, VXLAN_HLEN);
 	if (reason)
@@ -1708,7 +1712,15 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		raw_proto = true;
 	}
 
-	/* 移动当前的data指针到内层报文的头部，同时进行csum的适配 */
+	/* 移动当前的data指针到内层报文的头部，同时进行csum的适配。对于进行了csum
+	 * 卸载的情况下，这里会将skb->csum减去udp和vxlan头部，使得skb->csum等于内层
+	 * 报文的csum。
+	 * 
+	 * 在操作之前，skb->csum里的是pcsum，即外层伪首部。经过这个操作，再经过下面的
+	 * vxlan_set_mac的操作，最终skb->csum会变成内层的IP报文的正向csum。由于
+	 * IP头部整体csum为0，因此skb->csum此时其实是inner-L4的正向csum，其应该是
+	 * 内层的伪首部。
+	 */
 	if (__iptunnel_pull_header(skb, VXLAN_HLEN, protocol, raw_proto,
 				   !net_eq(vxlan->net, dev_net(vxlan->dev)))) {
 		reason = SKB_DROP_REASON_NOMEM;
@@ -1753,6 +1765,9 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	if (!raw_proto) {
 		/* 重新设置mac头位置，解析出来三层协议，并将data移动到三层数据。同时，
 		 * 这里会将skb的目标网口设置为vxlan口。
+		 *
+		 * 与此同时，这里会对csum进行pull，减去eth头部的数据，使得skb->csum
+		 * 变成L3层数据的csum。
 		 */
 		reason = vxlan_set_mac(vxlan, vs, skb, vni);
 		if (reason)

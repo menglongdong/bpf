@@ -423,19 +423,48 @@ bool inet_addr_is_any(struct sockaddr_storage *addr)
 }
 EXPORT_SYMBOL(inet_addr_is_any);
 
-void inet_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
+__attribute__((optimize("O0"))) void inet_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
 			      __be32 from, __be32 to, bool pseudohdr)
 {
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
+		/* 走到这里，说明不是在发送阶段进行csum的offload。这里可能是
+		 * 发包阶段采用软件csum的方式，也可能是收包阶段。
+		 */
 		csum_replace4(sum, from, to);
+		/* 这种情况下，是收包路径。因为在发包路径上不会设置
+		 * CHECKSUM_COMPLETE的。这种模式下，skb->csum也要跟着一起更新的。
+		 *
+		 * skb->csum实际上可以理解为存储的是伪首部的反向csum。这是因为：
+		 *   skb->csum + pcsum = tcp->csum + csum + pcsum = 0
+		 *
+		 * 上面的csum指的是L4部分的正向校验和。这里可以看出来，L4部分数据的变
+		 * 动和skb->csum是没关系的。
+		 */
 		if (skb->ip_summed == CHECKSUM_COMPLETE && pseudohdr)
 			skb->csum = ~csum_add(csum_sub(~(skb->csum),
 						       (__force __wsum)from),
 					      (__force __wsum)to);
-	} else if (pseudohdr)
+	} else if (pseudohdr) {
+		/* 这里的代码的逻辑是和 csum_replace4() 完全一致的，不清楚为啥不使用
+		 * 这个函数？
+		 *
+		 * 这里一般是发包路径的offload路径。这种情况下，由于csum是要
+		 * 卸载到nic上的，因此这里不需要进行csum的计算，除非的伪首部的
+		 * 情况。
+		 * 
+		 * 所以这里是什么意思呢？这里没有把sum取反的操作，说明这里的sum
+		 * 里存储的是正向的csum信息。offload模式下，会将伪首部以正向
+		 * csum的形式先存储在tcp->check中吗？
+		 * 
+		 * 我算是看明白了。CHECKSUM_PARTIAL代表的是部分校验和已经计算过
+		 * 了，这个一般是将伪首部的校验和算好后先放到TCP/UDP校验和中，随后
+		 * 计算完整的校验和的时候，会在这个基础上进行。需要说明的是，这种
+		 * 情况下，里面存储的是正向的csum。
+		 */
 		*sum = ~csum_fold(csum_add(csum_sub(csum_unfold(*sum),
 						    (__force __wsum)from),
 					   (__force __wsum)to));
+	}
 }
 EXPORT_SYMBOL(inet_proto_csum_replace4);
 

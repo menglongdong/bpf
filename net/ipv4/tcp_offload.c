@@ -125,7 +125,7 @@ static struct sk_buff *tcp4_gso_segment(struct sk_buff *skb,
 		th->check = 0;
 		/* 代表部分校验码已经计算，也就是四层校验码 */
 		skb->ip_summed = CHECKSUM_PARTIAL;
-		/* 计算TCP校验码 */
+		/* 计算TCP校验码。这里只设置了TCP报文上的csum，还没有设置skb上的csum */
 		__tcp_v4_send_check(skb, iph->saddr, iph->daddr);
 	}
 
@@ -182,6 +182,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 
 	/* 对skb进行分段。这里的分段实际上是将skb中的聚合分散IO去的数据取出来，构造
 	 * 成一个skb链表，链表中的每个skb数据的长度都不超过mss。
+	 *
+	 * 这里在分段过程中，还会检查nic的特性，只处理特定的逻辑。比如，会检查nic
+	 * 是否支持当前协议的csum，再来判断是否需要软csum。
 	 */
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs))
@@ -197,6 +200,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	if (skb_is_gso(segs))
 		mss *= skb_shinfo(segs)->gso_segs;
 
+	/* 这个是根据老的len、新的len，计算出来的一个csum的差值，其中thlen+mss
+	 * 为新的数据的长度。
+	 */
 	delta = (__force __wsum)htonl(oldlen + thlen + mss);
 
 	skb = segs;
@@ -206,6 +212,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	if (unlikely(skb_shinfo(gso_skb)->tx_flags & SKBTX_ANY_TSTAMP))
 		tcp_gso_tstamp(segs, gso_skb, seq, mss);
 
+	/* 这里TCP头部存储的check有点奇怪，看起来像是正向的？根据原始的th->check
+	 * 计算出来了一个反向的csum
+	 */
 	newcheck = ~csum_fold(csum_add(csum_unfold(th->check), delta));
 
 	ecn_cwr_mask = !!(skb_shinfo(gso_skb)->gso_type & SKB_GSO_TCP_ACCECN);
@@ -215,10 +224,18 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 		th->fin = th->psh = 0;
 		th->check = newcheck;
 
-		if (skb->ip_summed == CHECKSUM_PARTIAL)
+		if (skb->ip_summed == CHECKSUM_PARTIAL) {
+			/* 走到这里，说明这个报文还是要使用nic进行csum的计算 */
 			gso_reset_checksum(skb, ~th->check);
-		else
+		} else {
+			/* 走到这里，说明需要使用软件cusm。这里的th->check一般
+			 * 是0,或者是伪首部的校验和。这里可以看出来，在不进行
+			 * nic的csum的时候，会先将伪首部的校验和放到tcp->check
+			 * 中，后面再进行TCP报头、数据部分的校验和的计算，整个
+			 * 过程都在下面的这个函数中。
+			 */
 			th->check = gso_make_checksum(skb, ~th->check);
+		}
 
 		seq += mss;
 		if (copy_destructor) {

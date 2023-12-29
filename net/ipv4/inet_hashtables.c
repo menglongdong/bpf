@@ -645,13 +645,16 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 
 		if (likely(inet_match(net, sk2, acookie, ports, dif, sdif))) {
 			if (sk2->sk_state == TCP_TIME_WAIT) {
-				tw = inet_twsk(sk2);
-					/* 对TCP来说，若tw可复用则不视为冲突。 */
+					tw = inet_twsk(sk2);
+					/*
+					 * 对于 TCP，这里通过 tcp_twsk_unique() 判断
+					 * TIME_WAIT 套接口是否可复用；可复用则不视为冲突。
+					 */
 					if (tcp_twsk_unique(sk, sk2, twp))
 						break;
+				}
+				goto not_unique;
 			}
-			goto not_unique;
-		}
 	}
 
 	/* 

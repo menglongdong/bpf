@@ -4983,6 +4983,7 @@ normal:
 			if (!csum) {
 				if (!nskb->remcsum_offload)
 					nskb->ip_summed = CHECKSUM_NONE;
+				/* 拷贝数据，同时计算拷贝的数据的csum */
 				SKB_GSO_CB(nskb)->csum =
 					skb_copy_and_csum_bits(head_skb, offset,
 							       skb_put(nskb,
@@ -5077,6 +5078,9 @@ perform_csum_check:
 
 			if (!nskb->remcsum_offload)
 				nskb->ip_summed = CHECKSUM_NONE;
+			/* 这里应该是计算数据区的校验和，还没有考虑TCP头部和
+			 * 伪首部。
+			 */
 			SKB_GSO_CB(nskb)->csum =
 				skb_checksum(nskb, doffset,
 					     nskb->len - doffset, 0);
