@@ -7810,7 +7810,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			break;
 		}
 
-	/* 这里的逻辑和tcp_close中的类似，如果linger2小于0，那么立马释放连接。*/
+		/* 这里的逻辑和tcp_close中的类似，如果linger2小于0，那么立马释放连接。*/
 		if (READ_ONCE(tp->linger2) < 0) {
 			tcp_done(sk);
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONDATA);

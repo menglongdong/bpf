@@ -532,6 +532,10 @@ struct tcp_sock {
 	unsigned int		keepalive_time;	  /* time before keep alive takes place */
 	unsigned int		keepalive_intvl;  /* time interval between keep alive probes */
 
+	/* TCP套接口在FIN_WAIT2状态下的超时时间，通过TCP_LINGER2选项设置。没有设置
+	 * 的话就取默认的sysctl_tcp_fin_timeout。如果小于0的话，会不经过FIN_WAIT2，
+	 * 直接进行RST断链。
+	 */
 	int			linger2;
 
 

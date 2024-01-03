@@ -1955,6 +1955,9 @@ resolve_normal_ct(struct nf_conn *tmpl,
 	 * 这里可以看出，对于响应的报文，其状态始终为IP_CT_ESTABLISHED_REPLY
 	 * 状态。对于ORIGIN方向的报文，如果收到过响应报文，那么其状态为
 	 * IP_CT_ESTABLISHED；否则，其状态为NEW或者RELATED。
+	 * 
+	 * 每个ct都会把它的两个方向的tuple插入到哈希表中，而每个tuple中记录了当前tuple
+	 * 的方向。通过这个信息，可以使用tuple来找到ct，也可以判断当前报文的方向。
 	 */
 	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY) {
 		ctinfo = IP_CT_ESTABLISHED_REPLY;

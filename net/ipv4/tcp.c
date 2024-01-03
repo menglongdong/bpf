@@ -3329,7 +3329,7 @@ void __tcp_close(struct sock *sk, long timeout)
 	} else if (sock_flag(sk, SOCK_LINGER) && !sk->sk_lingertime) {
 		/*
 		 * 对于设置了SOCK_LINGER选项且sk_lingertime为0的情况，不使用四次挥手，
-		 * 而是调用tcp_disconnect直接使用RST断开连接。
+		 * 而是调用 tcp_disconnect 直接使用RST断开连接。
 		 *
 		 * SOCK_LINGER为以阻塞的方式断开连接，sk_lingertime为等待超时时间。
 		 * sk->sk_lingertime为0代表立刻释放TCP连接。
@@ -3354,6 +3354,13 @@ void __tcp_close(struct sock *sk, long timeout)
 	 *
 	 * 这个在timeout不为0的情况下生效，而timeout是取的sk->sk_lingertime，可以由
 	 * 用户设置。这个等待的过程一般用于等待发送缓冲区的数据进行发送完成。
+	 * 
+	 * 可以看出来，如果没有设置SO_LINGER选项，那么是不会以阻塞的方式进行CLOSE的。
+	 * 这个选项设置的是等待的超时时间，如果设置为0的话（可以参考上面的代码），那么
+	 * 会不进行四次挥手，而是直接进行RST。
+	 * 
+	 * 这里如果是阻塞方式的话，一般会到FIN_WAIT2的状态。这种状态下，当前的套接口已经
+	 * 进入到TW状态了，已经可以被reuse了。
 	 */
 	sk_stream_wait_close(sk, timeout);
 

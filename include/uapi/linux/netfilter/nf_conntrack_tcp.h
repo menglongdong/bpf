@@ -11,6 +11,7 @@ enum tcp_conntrack {
 	TCP_CONNTRACK_SYN_SENT,
 	TCP_CONNTRACK_SYN_RECV,
 	TCP_CONNTRACK_ESTABLISHED,
+	/* 注意这里没有FIN_WAIT2的状态，下一个状态是CLOSE_WAIT */
 	TCP_CONNTRACK_FIN_WAIT,
 	TCP_CONNTRACK_CLOSE_WAIT,
 	TCP_CONNTRACK_LAST_ACK,
@@ -19,6 +20,12 @@ enum tcp_conntrack {
 	TCP_CONNTRACK_LISTEN,	/* obsolete */
 #define TCP_CONNTRACK_SYN_SENT2	TCP_CONNTRACK_LISTEN
 	TCP_CONNTRACK_MAX,
+	/* IGNORE和MAX的处理方式是不同的。对于IGNORE，CT这里会作为有效报文进行跟踪，
+	 * 但是MAX代表着INVALID，根本不会对其进行跟踪。这种情况下，会导致MAX状态的
+	 * 报文不被NAT。
+	 * 
+	 * 这里应该是因为MAX状态的报文是有问题的报文，比如TCP不包含任何的标志位的情况。
+	 */
 	TCP_CONNTRACK_IGNORE,
 	TCP_CONNTRACK_RETRANS,
 	TCP_CONNTRACK_UNACK,

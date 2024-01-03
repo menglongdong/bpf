@@ -114,6 +114,7 @@ enum tcp_bit_set {
  *
  * NONE:	initial state
  * SYN_SENT:	SYN-only packet seen
+ * 同时打开的场景，比较少见，可以不考虑
  * SYN_SENT2:	SYN-only packet seen from reply dir, simultaneous open
  * SYN_RECV:	SYN-ACK packet seen
  * ESTABLISHED:	ACK packet seen
@@ -1002,6 +1003,11 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 	struct tcphdr _tcph;
 	unsigned long timeout;
 
+	/* 这个函数的返回值如果是负数的话，除非是-NF_REPEAT，其他的都会导致ct失效，
+	 * 即不会对这个报文进行ct跟踪。不过skb不会在这个函数中被丢弃，即ct阶段不会进行
+	 * 丢包处理。
+	 */
+
 	th = skb_header_pointer(skb, dataoff, sizeof(_tcph), &_tcph);
 	if (th == NULL)
 		return -NF_ACCEPT;
@@ -1013,14 +1019,30 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 		return -NF_ACCEPT;
 
 	spin_lock_bh(&ct->lock);
+	/* 可以看出来，这个ct并没有维护两个方向的状态，而是只维护了一个方向的状态。
+	 * 这导致状态机在翻转的时候，是全局翻转的，而不是考虑到方向的。这里维护的状态，
+	 * 也是两个方向共同保持的状态。
+	 */
 	old_state = ct->proto.tcp.state;
 	dir = CTINFO2DIR(ctinfo);
 	/* 通过tcp报文的flags，获取报文（连接）的状态 */
 	index = get_conntrack_index(th);
 	new_state = tcp_conntracks[dir][index][old_state];
 
+	/* 一个完整的正常的四次挥手的状态变更为：
+	 * 
+	 * eES → FIN(ORGIN) → sFW → ACK(REPLY) → sCW → FIN(REPLY) → sLA → ACK(ORIGIN) → sTW
+	 *
+	 * 这里可以看出来，ct并没有维护两个方向的状态，而是维护了当前最新的状态。这是因为，
+	 * 一个状态（最新一端的状态）即可知道当前双方的状态。
+	 */
+
 	switch (new_state) {
 	case TCP_CONNTRACK_SYN_SENT:
+		/* 根据状态轮转机的流程来看，只有在收到SYN报文的情况下才会进入到这个
+		 * 代码流程。这里如果old_state小于TW，那么它就只能是sNO或者sSS，
+		 * 是正常的流程。
+		 */
 		if (old_state < TCP_CONNTRACK_TIME_WAIT)
 			break;
 		/* RFC 1122: "When a connection is closed actively,
@@ -1034,6 +1056,14 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 		 * Handle aborted connections: we and the server
 		 * think there is an existing connection but the client
 		 * aborts it and starts a new one.
+		 */
+		/* 走到这里，说明是其他流程，即当前已经存在了一个连接的情况，老的连接的
+		 * 状态必须得是TW/CLOSE/SS2（同时打开）状态之一。
+		 *
+		 * 如果当前的ct的两个方向之一进入到过FW的状态，或者当前的方向的上一个
+		 * 报文是RST报文，那么就允许释放当前的ct并重新处理当前的SYN报文，跟踪
+		 * 新的连接。这里的逻辑分别对应着上面的TW和CLOSE的状态，即收到RST
+		 * 报文，ct会进入到CLOSE的状态。
 		 */
 		if (((ct->proto.tcp.seen[dir].flags
 		      | ct->proto.tcp.seen[!dir].flags)
@@ -1052,6 +1082,7 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 				return -NF_REPEAT;
 			return NF_DROP;
 		}
+		/* 其他的情况，会忽略这个不合法的报文。 */
 		fallthrough;
 	case TCP_CONNTRACK_IGNORE:
 		/* Ignored packets:
@@ -1067,6 +1098,16 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 		 * If the ignored packet is invalid, the receiver will send
 		 * a RST we'll catch below.
 		 */
+		/* 在某些情况下，会忽略报文，不用它来更新当前的状态机。主要包括以下
+		 * 场景：
+		 * 
+		 * - origin方向收到的SYN报文（重传报文）
+		 * - reply方向收到的SYN/ACK报文（重传报文）
+		 * - reply方向收到的ACK报文（origin方向刚发过SYN报文）
+		 * 
+		 * 直接将报文转发给server端，让server端来决定怎么搞（比如server端
+		 * 可能会回复RST报文）。
+		 */
 		if (index == TCP_SYNACK_SET
 		    && ct->proto.tcp.last_index == TCP_SYN_SET
 		    && ct->proto.tcp.last_dir != dir
@@ -1076,6 +1117,14 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 			 * the server are both in sync, while the firewall is
 			 * not. We get in sync from the previously annotated
 			 * values.
+			 */
+
+			/* 如果上一个报文是来自ORIGIN方向的SYN报文，并且这一个报文是
+			 * REPLY方向的SYN/ACK报文，那么将当前ct的状态进行更新，变更
+			 * 为TCP_CONNTRACK_SYN_RECV状态。
+			 * 
+			 * 这里认为，客户端和服务器进入到了三次握手状态，但是咱们的ct
+			 * 没有进入，这里咱们也参与一下。
 			 */
 			old_state = TCP_CONNTRACK_SYN_SENT;
 			new_state = TCP_CONNTRACK_SYN_RECV;
@@ -1151,6 +1200,7 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 		 * be associated with the original conntrack entry in order to
 		 * generate a new SYN with the correct sequence number.
 		 */
+		/* 处理SYN代理的场景 */
 		if (nfct_synproxy(ct) && old_state == TCP_CONNTRACK_SYN_SENT &&
 		    index == TCP_ACK_SET && dir == IP_CT_DIR_ORIGINAL &&
 		    ct->proto.tcp.last_dir == IP_CT_DIR_ORIGINAL &&
@@ -1304,6 +1354,9 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 	if (!timeouts)
 		timeouts = tn->timeouts;
 
+	/* 确定当前状态的超时时间，初始（默认）超时时间是通过数组 tcp_timeouts 来确定
+	 * 的。
+	 */
 	if (ct->proto.tcp.retrans >= tn->tcp_max_retrans &&
 	    timeouts[new_state] > timeouts[TCP_CONNTRACK_RETRANS])
 		timeout = timeouts[TCP_CONNTRACK_RETRANS];
