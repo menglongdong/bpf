@@ -76,6 +76,7 @@ int ip6_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 		return NET_RX_SUCCESS;
 	ip6_rcv_finish_core(net, sk, skb);
 
+	/* 这里会调用 ip6_input */
 	return dst_input(skb);
 }
 

@@ -3278,6 +3278,14 @@ void tcp_send_loss_probe(struct sock *sk)
 	int pcount;
 	int mss = tcp_current_mss(sk);
 
+	/* TLP定时器超时的处理函数。如果发送队列（不是重传队列）中有数据，且在窗口范围
+	 * 内，那么就发送一个新的数据。否则，重传rtx队列中的第一个数据，并将
+	 * tlp_retrans设置为1。同时，将tp->snd_nxt保存到tp->tlp_high_seq。
+	 * 
+	 * 在发送完成后，会重置rtx定时器。可以看出来，TLP只会触发一次。同时，在rto定时器
+	 * 超时的时候，会把tlp_high_seq置为0，导致后续的ACK不会再进入到TLP流程。
+	 */
+
 	/* TLP只触发一次，已经触发过了的话就启动RTO定时器 */
 	if (tp->tlp_high_seq)
 		goto rearm_timer;

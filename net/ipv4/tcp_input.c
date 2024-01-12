@@ -4393,6 +4393,10 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 发送完TLP后，如果没有再发生RTO的情况，那么这里会看看在ack达到tlp_high_seq
+	 * 的时候的状态，从而判断是真的发生了丢包。
+	 */
+
 	if (before(ack, tp->tlp_high_seq))
 		return;
 
@@ -4762,6 +4766,9 @@ old_ack:
 	/*
 	 * 如果报文携带sack信息，那么检查其是否是dsack报文，并判断是否要撤销拥塞状态。
 	 * 这里可以看到，如果收到了一个老的不携带sack信息的ack，那么是没有作用的。
+	 * 
+	 * 在四次挥手过程中，一个old ack会导致协议栈丢包，即不处理这个报文中的信息，即使
+	 * 它是FIN报文。
 	 */
 	if (TCP_SKB_CB(skb)->sacked) {
 		/* 进行sack信息的处理，包括dsack。*/
@@ -5147,6 +5154,8 @@ static enum skb_drop_reason tcp_disordered_ack_check(const struct sock *sk,
 	SKB_DR_INIT(reason, TCP_RFC7323_PAWS);
 	u32 ack = TCP_SKB_CB(skb)->ack_seq;
 	u32 seq = TCP_SKB_CB(skb)->seq;
+
+	/* 判断一个报文是不是一个纯的有效的重复ACK？ */
 
 	/* 1. Is this not a pure ACK ? */
 	if (!th->ack || seq != TCP_SKB_CB(skb)->end_seq)
