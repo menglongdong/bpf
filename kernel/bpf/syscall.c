@@ -2978,6 +2978,9 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 		btf_get(attach_btf);
 	}
 
+	/* 这里的 attach_btf 指的是vmlinux中的btf信息或者的BPF程序（ attach_prog_fd）
+	 * 中的btf信息。
+	 */
 	if (bpf_prog_load_check_attach(type, attr->expected_attach_type,
 				       attach_btf, attr->attach_btf_id,
 				       dst_prog)) {
@@ -3611,6 +3614,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		goto out_put_prog;
 	}
 
+	/* 目前，tgt_prog_fd只有在freplace的情况下才会被指定。这种情况下，允许将一个
+	 * freplace类型（EXT）的BPF程序attach到多个attach point。
+	 */
 	if (!!tgt_prog_fd != !!btf_id) {
 		err = -EINVAL;
 		goto out_put_prog;
@@ -3689,6 +3695,8 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	 */
 	/* tgt_prog在类型为BPF_PROG_TYPE_EXT的时候才会有值。而
 	 * prog->aux->dst_trampoline一般会在check_attach_btf_id中被赋值。
+	 * 如果这里的dst_trampoline有值，那么会在attach成功之后，将其转移到link对象
+	 * 上。
 	 */
 	if (!prog->aux->dst_trampoline && !tgt_prog) {
 		/*
@@ -3715,6 +3723,11 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	    (key && key != prog->aux->dst_trampoline->key)) {
 		/* 目标函数改变了，attach的时候指定的目标函数和load的时候指定的
 		 * 不一样。这里会根据当前的btf_id重新获取对应的目标的tr。
+		 *
+		 * 如果这里的prog->aux->dst_trampoline是空，就说明已经attach过
+		 * 一个目标了，这里在进行多目标attach。或者，load的时候指定的目标
+		 * 和现在的不是一个目标，这里也要进行重新的check。这些情况目前是
+		 * 只针对freplace的。
 		 */
 
 		/* If there is no saved target, or the specified target is
@@ -3723,6 +3736,9 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		 */
 		struct bpf_attach_target_info tgt_info = {};
 
+		/* 这里检查并初始化attach目标的一些信息，但是这里不会进行检查器的重新
+		 * 检查。
+		 */
 		err = bpf_check_attach_target(NULL, prog, tgt_prog, btf_id,
 					      &tgt_info);
 		if (err)
@@ -3733,6 +3749,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 			prog->aux->mod = tgt_info.tgt_mod;
 		}
 
+		/* 根据需要来创建新的trampoline */
 		tr = bpf_trampoline_get(key, &tgt_info);
 		if (!tr) {
 			err = -ENOMEM;

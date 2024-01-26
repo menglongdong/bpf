@@ -28,6 +28,7 @@ struct btf_header {
 /* Max # of struct/union/enum members or func args */
 #define BTF_MAX_VLEN	0xffff
 
+/* 每个btf_type的id信息不包含在btf_type中，id就是btf_type在整个btf数据数组中的索引 */
 struct btf_type {
 	/* 当前类型的名称在符号表中的偏移量，通过btf_name_by_offset可以将这个偏移
 	 * 转为字符串。

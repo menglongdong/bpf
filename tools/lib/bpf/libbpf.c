@@ -7789,18 +7789,10 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 
 		attach_name = strchr(prog->sec_name, '/');
 		if (!attach_name) {
-			/* if BPF program is annotated with just SEC("fentry")
-			 * (or similar) without declaratively specifying
-			 * target, then it is expected that target will be
-			 * specified with bpf_program__set_attach_target() at
-			 * runtime before BPF object load step. If not, then
-			 * there is nothing to load into the kernel as BPF
-			 * verifier won't be able to validate BPF program
-			 * correctness anyways.
+			/* this is a anonymous BPF program, which doesn't
+			 * specify the attach target.
 			 */
-			pr_warn("prog '%s': no BTF-based attach target is specified, use bpf_program__set_attach_target()\n",
-				prog->name);
-			return -EINVAL;
+			return 0;
 		}
 		attach_name++; /* skip over / */
 

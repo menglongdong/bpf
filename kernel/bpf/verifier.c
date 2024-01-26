@@ -25233,6 +25233,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		/* 这里用于检查eBPF弹簧的逻辑，即将eBPF程序（FENTRY、FEXIT）挂载
 		 * 到另一个eBPF程序上。
+		 *
+		 * 这里先根据btf_id从目标bpf程序的BTF中查找到目标函数（子程序），
+		 * 没找到的话会报错。
 		 */
 		for (i = 0; i < aux->func_info_cnt; i++)
 			if (aux->func_info[i].type_id == btf_id) {

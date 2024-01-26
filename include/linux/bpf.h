@@ -1667,6 +1667,7 @@ struct bpf_prog_aux {
 	u32 func_cnt; /* used by non-func prog as the number of func progs */
 	u32 real_func_cnt; /* includes hidden progs, only used for JIT and freeing progs */
 	u32 func_idx; /* 0 for non-func prog, the index in func array for func prog */
+	/* TRACING类型的BPF程序挂载（跟踪）的内核函数的BTF */
 	u32 attach_btf_id; /* in-kernel BTF type id to attach to */
 	u32 attach_st_ops_member_off;
 	u32 ctx_arg_info_size;
@@ -3011,6 +3012,12 @@ static inline bool bpf_tracing_btf_ctx_access(int off, int size,
 					      const struct bpf_prog *prog,
 					      struct bpf_insn_access_aux *info)
 {
+	/* the TRACING program has not set attach target yet, don't allow
+	 * to access the ctx.
+	 */
+	if (!prog->aux->attach_btf_id)
+		return false;
+
 	if (!bpf_tracing_ctx_access(off, size, type))
 		return false;
 	return btf_ctx_access(off, size, type, prog, info);

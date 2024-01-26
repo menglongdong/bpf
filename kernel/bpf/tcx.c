@@ -16,6 +16,14 @@ int tcx_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct net_device *dev;
 	int ret;
 
+	/* 每个dev上都会有两个mprog_entry实例，分别对应ingress和egress。在进行BPF
+	 * 程序的attach的时候，不再需要将BPF程序attach到clsact上，而是直接attach
+	 * 到这个dev上。
+	 * 
+	 * 在ingress和egress的地方，直接取这里的BPF程序来进行调用。这里的ingress和
+	 * egress不再依赖于CLSACT。
+	 */
+
 	rtnl_lock();
 	dev = __dev_get_by_index(net, attr->target_ifindex);
 	if (!dev) {

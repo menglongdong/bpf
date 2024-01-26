@@ -743,6 +743,10 @@ int bpf_link_create(int prog_fd, int target_fd,
 	if (iter_info_len || target_btf_id) {
 		if (iter_info_len && target_btf_id)
 			return libbpf_err(-EINVAL);
+		/* 指定了 target_btf_id ，说明是freplace的情况（进行multi attach）
+		 * 这种情况下，不需要下面设置cookie的逻辑，因为freplace类型的BPF
+		 * 程序是不支持cookie的。
+		 */
 		if (!OPTS_ZEROED(opts, target_btf_id))
 			return libbpf_err(-EINVAL);
 	}
@@ -753,6 +757,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 	attr.link_create.attach_type = attach_type;
 	attr.link_create.flags = OPTS_GET(opts, flags, 0);
 
+	/* 同样的道理，不需要下面的逻辑。 */
 	if (target_btf_id) {
 		attr.link_create.target_btf_id = target_btf_id;
 		goto proceed;
@@ -889,7 +894,6 @@ int bpf_link_create(int prog_fd, int target_fd,
 			return libbpf_err(-EINVAL);
 		break;
 	}
-proceed:
 	fd = sys_bpf_fd(BPF_LINK_CREATE, &attr, attr_sz);
 	if (fd >= 0)
 		return fd;
