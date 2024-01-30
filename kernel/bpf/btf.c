@@ -6850,6 +6850,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			 */
 			if (!t)
 				return true;
+			/* 获取当前函数的返回值的btf_type，func_proto的上一级是
+			 * 函数返回值的type id
+			 */
 			t = btf_type_by_id(btf, t->type);
 			break;
 		case BPF_MODIFY_RETURN:
@@ -6859,6 +6862,9 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			if (!t)
 				return false;
 
+			/* 对于modify_return，获取的也是函数返回值的type，只不过这里
+			 * 只允许返回值是整型，即size <= u64
+			 */
 			t = btf_type_skip_modifiers(btf, t->type, NULL);
 			if (!btf_type_is_small_int(t)) {
 				bpf_log(log,
@@ -6892,8 +6898,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		/* accessing a scalar */
 		return true;
 
-	/* 除去整形和枚举，剩下的也就是指针类型了。如果当前参数类型不是指针，那么
-	 * 就是非法访问（内核中应该还没有哪个函数直接把结构体作为参数来传参）。
+	/* 除去整形、枚举和结构体，剩下的也就是指针类型了。如果当前参数类型不是指针，那么
+	 * 就是非法访问。
 	 */
 	if (!btf_type_is_ptr(t)) {
 		bpf_log(log,

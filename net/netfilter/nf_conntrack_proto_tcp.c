@@ -1241,6 +1241,15 @@ int nf_conntrack_tcp_packet(struct nf_conn *ct,
 		ct->proto.tcp.last_flags |= IP_CT_TCP_SIMULTANEOUS_OPEN;
 		break;
 	case TCP_CONNTRACK_SYN_RECV:
+		/* 如果当前报文是一个reply方向的纯ACK报文，并且当前是处于同时打开的状态，
+		 * 那么直接将状态迁移到sES状态。
+		 *
+		 * 简单的理一下。当处于sSS状态的ct收到reply方向的SYN报文后，会进入
+		 * sS2（同时打开）的状态。此时，如果再收到reply方向的ack报文，那么
+		 * 就会将ct的状态更新到sES状态。如果收到的是origin方向的ack报文，
+		 * 会认为是无效报文。这里认为，先收到的origin方向的SYN，所以这个SYN
+		 * 对应的ack会先到，且不允许乱序？
+		 */
 		if (dir == IP_CT_DIR_REPLY && index == TCP_ACK_SET &&
 		    ct->proto.tcp.last_flags & IP_CT_TCP_SIMULTANEOUS_OPEN)
 			new_state = TCP_CONNTRACK_ESTABLISHED;

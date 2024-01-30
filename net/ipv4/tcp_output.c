@@ -1547,6 +1547,10 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	if (clone_it) {
 		oskb = skb;
 
+		/* 这里是重传的情况。对于重传的报文，这里会先克隆一份，然后传的是克隆
+		 * 出来的那个报文。这样，在发送完成后，释放的也是克隆出来的，而不是
+		 * rtx队列中的报文，这样，只有等到ACK的时候，才会释放rtx中的报文。
+		 */
 		tcp_skb_tsorted_save(oskb) {
 			if (unlikely(skb_cloned(oskb)))
 				skb = pskb_copy(oskb, gfp_mask);
@@ -3148,7 +3152,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (TCP_SKB_CB(skb)->end_seq == TCP_SKB_CB(skb)->seq)
 			break;
 
-		/* 进行报文数据的发送 */
+		/* 进行报文数据的发送。这里将clone_it设置为了1，说明发送出去的是克隆
+		 * 体，本体在发送完成后不会被释放，而是会保留在rtx队列中。
+		 */
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
 
