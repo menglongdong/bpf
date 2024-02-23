@@ -2061,6 +2061,7 @@ struct rpc_xprt *xprt_create_transport(struct xprt_create *args)
 	struct rpc_xprt	*xprt;
 	const struct xprt_class *t;
 
+	/* 对于TCP，这里是 xs_tcp_transport */
 	t = xprt_class_find_by_ident(args->ident);
 	if (!t) {
 		dprintk("RPC: transport (%d) not supported\n", args->ident);

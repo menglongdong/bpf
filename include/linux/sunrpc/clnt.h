@@ -70,6 +70,7 @@ struct rpc_clnt {
 	struct xprtsec_parms	cl_xprtsec;	/* transport security policy */
 
 	struct rpc_rtt *	cl_rtt;		/* RTO estimator data */
+	/* 业务层面的超时重传时间设置，和TCP层的重传没有啥关系 */
 	const struct rpc_timeout *cl_timeout;	/* Timeout strategy */
 
 	atomic_t		cl_swapper;	/* swapfile count */

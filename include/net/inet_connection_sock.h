@@ -145,6 +145,7 @@ struct inet_connection_sock {
 		u32		  probe_timestamp;
 	} icsk_mtup;
 	u32			  icsk_probes_tstamp;
+	/* 这个是用户自定义的超时时间，即TCP连接从第一次重传到这个时间后会连接超时断链 */
 	u32			  icsk_user_timeout;
 
 	u64			  icsk_ca_priv[104 / sizeof(u64)];

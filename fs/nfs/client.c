@@ -453,6 +453,7 @@ struct nfs_client *nfs_get_client(const struct nfs_client_initdata *cl_init)
 
 		spin_unlock(&nn->nfs_client_lock);
 
+		/* 对于nfs4，这里是 nfs4_alloc_client */
 		new = rpc_ops->alloc_client(cl_init);
 	} while (!IS_ERR(new));
 

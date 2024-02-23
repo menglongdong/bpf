@@ -215,6 +215,7 @@ struct rpc_xprt {
 	const struct rpc_xprt_ops *ops;		/* transport methods */
 	unsigned int		id;		/* transport id */
 
+	/* 用于TCP连接的超时时间 */
 	const struct rpc_timeout *timeout;	/* timeout parms */
 	struct sockaddr_storage	addr;		/* server address */
 	size_t			addrlen;	/* size of server address */

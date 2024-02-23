@@ -3215,8 +3215,8 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
 	/* tcp_early_retrans 决定了TLP功能是否开启。同时，TLP只有在拥塞正常的
 	 * 情况下才会启用（包括CWR显式拥塞）。
 	 *
-	 * TLP的超时时间默认为2 *rtt。如果当前重传队列中只有一个报文，那么这里的
-	 * 超时时间和原来的是差不多的：2*rtt + 200ms；否则，就是：2*rtt + 2tick。
+	 * TLP的超时时间默认为(2 *rtt + 2ms)。如果当前重传队列中只有一个报文，那么这里的
+	 * 超时时间和原来的是差不多的：2*rtt + 200ms；否则，就是：2*rtt + 2ms。
 	 * 也就是说这里保证至少是2个tick的超时时间。
 	 */
 	early_retrans = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_early_retrans);
