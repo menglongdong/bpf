@@ -4266,6 +4266,15 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 	char buf[128];
 	int err;
 
+	/* 基于BTF（TRACING）和非基于BTF（RAW_TRACEPOINT）都会在这里进行tp的attach，
+	 * 不同点在于基于BTF的可以进行直接内存访问。对于BPF_PROG_TYPE_TRACING类型
+	 * 且BPF_TRACE_RAW_TP的bpf，它的attach过程和RAW_TRACEPOINT是完全一样的。
+	 * 这里可以看出来，BPF_TRACE_RAW_TP不是基于trampoline的。
+	 * 
+	 * 这个函数也可以在bpf_raw_tracepoint_open中调用，这种情况下会指定
+	 * user_tp_name
+	 */
+
 	switch (prog->type) {
 	case BPF_PROG_TYPE_TRACING:
 	case BPF_PROG_TYPE_EXT:

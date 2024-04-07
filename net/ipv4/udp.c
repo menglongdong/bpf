@@ -1127,13 +1127,25 @@ void udp_set_csum(bool nocheck, struct sk_buff *skb,
 	if (nocheck) {
 		uh->check = 0;
 	} else if (skb_is_gso(skb)) {
+		/* 这里的校验和是正向的 */
 		uh->check = ~udp_v4_check(len, saddr, daddr, 0);
 	} else if (skb->ip_summed == CHECKSUM_PARTIAL) {
 		uh->check = 0;
+		/* lco_cusm：L4中保存的原来的校验和，再和当前新增的L4头部及其后面的
+		 * 数据计算出来的csum。然后再和地址进行伪首部计算。
+		 *
+		 * 这里可以看出来，如果内层L4报文进行了csum的offload，那么udp层的
+		 * csum就不使用offload的方式了，而是根据内层报文里已经计算出来的
+		 * 伪首部的csum再和当前UDP头部进行udp校验和的计算。这个是可行的，
+		 * 因为内层L4的数据会在offload的时候进行校验和的自恰。
+		 */
 		uh->check = udp_v4_check(len, saddr, daddr, lco_csum(skb));
 		if (uh->check == 0)
 			uh->check = CSUM_MANGLED_0;
 	} else {
+		/* 内层报文没有使用offload的方式，那么外层报文尝试使用offload的方式
+		 * 进行csum的计算。
+		 */
 		skb->ip_summed = CHECKSUM_PARTIAL;
 		skb->csum_start = skb_transport_header(skb) - skb->head;
 		skb->csum_offset = offsetof(struct udphdr, check);

@@ -425,6 +425,8 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 
 	/* 检查当前的函数是否被ftrace托管了，即ftrace内核配置是否开启了。这里可以看
 	 * 出来，tracing是不依赖于ftrace功能的。
+	 *
+	 * 准确来说，这里是查看当前的函数是不是已经被ftrace跟踪（激活）了。
 	 */
 	faddr = ftrace_location((unsigned long)ip);
 	if (faddr) {
@@ -434,7 +436,7 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	}
 
 	if (tr->func.ftrace_managed) {
-		/* ftrace开启时使用direct ops路径注册。 */
+		/* ftrace 托管时走 direct ops 注册路径。 */
 		ret = direct_ops_add(tr, new_addr);
 	} else {
 		/* 未托管时直接更新目标入口处的调用。 */

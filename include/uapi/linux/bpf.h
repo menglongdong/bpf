@@ -1387,15 +1387,20 @@ enum {
  * ldimm64 rewrite:  address of the function
  * verifier type:    PTR_TO_FUNC.
  */
+/* 内存读取指令（imm），且源寄存器是BPF_PSEUDO_FUNC，说明imm中存储的是指向函数
+ * 的指针（BPF程序中的函数）。
+ */
 #define BPF_PSEUDO_FUNC		4
 
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
  */
+/* call指令，且源寄存器是BPF_PSEUDO_CALL，说明当前是在调用另外一个BPF程序函数 */
 #define BPF_PSEUDO_CALL		1
 /* when bpf_call->src_reg == BPF_PSEUDO_KFUNC_CALL,
  * bpf_call->imm == btf_id of a BTF_KIND_FUNC in the running kernel
  */
+/* call指令，且源寄存器是BPF_PSEUDO_KFUNC_CALL，说明当前正在调用kfunc内核函数 */
 #define BPF_PSEUDO_KFUNC_CALL	2
 
 enum bpf_addr_space_cast {

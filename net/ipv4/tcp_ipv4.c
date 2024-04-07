@@ -789,6 +789,10 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb,
 	struct net *net;
 	u32 txhash = 0;
 
+	/* reset报文的发送逻辑。首先，它会根据源报文来构建对应的TCP报文头部。真正用来
+	 * 发送这个reset报文的是当前CPU上的ipv4_tcp_sk这个套接口实例。
+	 */
+
 	/* Never send a reset in response to a reset. */
 	if (th->rst)
 		return;
@@ -898,6 +902,7 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb,
 		}
 	}
 
+	/* reset报文校验和的计算。这里算出了伪首部的校验和 */
 	arg.csum = csum_tcpudp_nofold(ip_hdr(skb)->daddr,
 				      ip_hdr(skb)->saddr, /* XXX */
 				      arg.iov[0].iov_len, IPPROTO_TCP, 0);
@@ -937,6 +942,9 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb,
 		ctl_sk->sk_mark = 0;
 		ctl_sk->sk_priority = 0;
 	}
+	/* 进行reset报文的构建和放入到发送队列，并发送出去。这个构建出来的skb的csum
+	 * 类型是CSUM_NONE，即不需要offload，完全由内核进行校验和的计算。
+	 */
 	ip_send_unicast_reply(ctl_sk, sk,
 			      skb, &TCP_SKB_CB(skb)->header.h4.opt,
 			      ip_hdr(skb)->saddr, ip_hdr(skb)->daddr,

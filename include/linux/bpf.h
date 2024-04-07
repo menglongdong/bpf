@@ -1739,6 +1739,9 @@ struct bpf_prog_aux {
 	struct bpf_token *token;
 	struct bpf_prog_offload *offload;
 	struct btf *btf;
+	/* 这个记录了当前的BPF程序中的所有的函数的信息，是用户态通过load时候的参数
+	 * 传递过来的。
+	 */
 	struct bpf_func_info *func_info;
 	struct bpf_func_info_aux *func_info_aux;
 	/* bpf_line_info loaded from userspace.  linfo->insn_off
@@ -1756,6 +1759,7 @@ struct bpf_prog_aux {
 	 * using the linfo_idx.
 	 */
 	void **jited_linfo;
+	/* BPF中的函数的个数。 */
 	u32 func_info_cnt;
 	u32 nr_linfo;
 	/* subprog can use linfo_idx to access its first linfo and

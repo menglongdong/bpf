@@ -1035,6 +1035,8 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	u32 now;
 
+	/* 这个函数只有在收到正确的数据（非乱序报文）才会被调用。 */
+
 	inet_csk_schedule_ack(sk);
 
 	tcp_measure_rcv_mss(sk, skb);
@@ -1043,6 +1045,19 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 	now = tcp_jiffies32;
 
+	/* 每一次收到数据的时候，都会对ato的状态进行更新。如果当前是第一次收到数据，
+	 * 那么首先进入到QUICKACK模式，并初始化ato为40ms。
+	 *
+	 * 随后，每次收到报文都会进行更新。首先，如果这次收到报文的时间距离上次
+	 * （这里记为delta）小于20ms,那么更新当前的ato = (ato / 2) + 20ms；
+	 * 如果小于当前的ato,那么ato = (ato / 2) + delta；如果delta比rto要大，
+	 * 那么这里就不进行delay ack,而是采用quickack的方式。这里认为跨度太大了，
+	 * 不能再延迟ack了。
+	 * 
+	 * 这里的逻辑是为了预测对端发送数据的频率，从而尝试将多个ack合并成一个再
+	 * 发送。如果对端发送的很快，那么ato会一直保持在40ms；否则，会尝试将ato
+	 * 向rto进行靠拢。如果数据发送的间隔大于rto了，那么将不尝试合并ack。
+	 */
 	if (!icsk->icsk_ack.ato) {
 		/* The _first_ data packet received, initialize
 		 * delayed ACK engine.
@@ -3665,7 +3680,9 @@ static void tcp_update_rtt_min(struct sock *sk, u32 rtt_us, const int flag)
 			   rtt_us ? : jiffies_to_usecs(1));
 }
 
-/* 收到ACK后，更新rtt的函数 */
+/* 收到ACK后，更新rtt的函数。这里的 seq_rtt_us 是根据ack的第一个报文计算出来的rtt，
+ * ca_rtt_us 是ack的最后一个报文计算出来的，sack_rtt_us 是根据sack信息计算出来的。
+ */
 static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 			       long seq_rtt_us, long sack_rtt_us,
 			       long ca_rtt_us, struct rate_sample *rs)
@@ -5302,7 +5319,9 @@ void tcp_fin(struct sock *sk)
 	case TCP_SYN_RECV:
 	case TCP_ESTABLISHED:
 		/* Move to CLOSE_WAIT */
-		/* 迁移至CLOSE_WAIT状态，本端是被动断开端。 */
+		/* 迁移至CLOSE_WAIT状态，本端是被动断开端。可以看出来，在四次挥手
+		 * 过程中，会自动的进入到pingpong模式，等待FIN+ACK一起发送。
+		 */
 		tcp_set_state(sk, TCP_CLOSE_WAIT);
 		inet_csk_enter_pingpong_mode(sk);
 		break;
@@ -6543,6 +6562,9 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 	u64 delay;
 
 	    /* More than one full frame received... */
+	/* 如果当前处于quickack模式（且不处于pingpong模式），或者有ICSK_ACK_NOW标志，
+	 * 或者套接口设置了SO_RCVLOWAT，那么就直接进行ack的发送。
+	 */
 	if (((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss &&
 	     /* ... and right edge of window advances far enough.
 	      * (tcp_recvmsg() will send ACK otherwise).
@@ -6568,15 +6590,33 @@ send_now:
 		return;
 	}
 
+	/* 当前没有乱序（快速路径），或者ofo队列中没有数据的话，那么就尝试进行
+	 * delay ack。也就是说，在常规情况下会优先尝试使用delay ack。
+	 *
+	 * 快速路径下，这里就是终点。
+	 */
 	if (!ofo_possible || RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
 		tcp_send_delayed_ack(sk);
 		return;
 	}
 
+	/* sack没有开启，或者压缩ack达到阈值，那么就直接发送ack。 */
 	if (!tcp_is_sack(tp) ||
 	    tp->compressed_ack >= READ_ONCE(net->ipv4.sysctl_tcp_comp_sack_nr))
 		goto send_now;
 
+	/* 下面是压缩ACK的逻辑。每次收到数据后，将compressed_ack_rcv_nxt更新为下一个
+	 * 要接收的数据。后面如果收到非预期的数据（乱序数据，或者是老的数据），都会
+	 * 立马响应ack，从而可以更快的响应dupack给对端。
+	 * 
+	 * 直到响应的dupack数量达到3个，后面再会走压缩ack的逻辑。压缩ack的时候，会
+	 * 采用定时器来延迟发送ack。定时器超时后，会清空compressed_ack计数。发送ack
+	 * 的时候，也会将这个计数清空。
+	 * 
+	 * 这也就意味着，当出现乱序的情况时，对于前三个报文，会立马响应ack；对于后面的
+	 * 报文，会每隔sysctl_tcp_comp_sack_nr个数据报文或者(rtt / 5)时间内发送
+	 * 一个ack。
+	 */
 	if (tp->compressed_ack_rcv_nxt != tp->rcv_nxt) {
 		tp->compressed_ack_rcv_nxt = tp->rcv_nxt;
 		tp->dup_ack_counter = 0;
@@ -6605,7 +6645,6 @@ send_now:
 		READ_ONCE(net->ipv4.sysctl_tcp_comp_sack_rtt_percent);
 
 	delay = min(delay, READ_ONCE(net->ipv4.sysctl_tcp_comp_sack_delay_ns));
-
 	sock_hold(sk);
 	hrtimer_start_range_ns(&tp->compressed_ack_timer, ns_to_ktime(delay),
 			       READ_ONCE(net->ipv4.sysctl_tcp_comp_sack_slack_ns),
@@ -7089,6 +7128,13 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 				tcp_update_wl(tp, TCP_SKB_CB(skb)->seq);
 			}
 
+			/* 直接调用这个函数来检查是否需要发送ACK.需要注意的是，这个
+			 * 函数里面没有检查ACK_SCHED标志，也就意味着调用这个函数
+			 * 是在已经ACK_SCHED的情况下。tcp_ack_snd_check版本是检查
+			 * 了ACK_SCHED标志的。
+			 * 
+			 * 这个函数里面会根据各种情况来判断是否需要延迟发送ACK。
+			 */
 			__tcp_ack_snd_check(sk, 0);
 no_ack:
 			if (eaten)

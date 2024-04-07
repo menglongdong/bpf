@@ -178,6 +178,8 @@ void udp_tunnel_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *skb
 {
 	struct udphdr *uh;
 
+	/* 构建UDP报文头部，同时设置vxlan UDP报文的伪首部校验和 */
+
 	__skb_push(skb, sizeof(*uh));
 	skb_reset_transport_header(skb);
 	uh = udp_hdr(skb);

@@ -186,6 +186,13 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 	__wsum partial;
 	bool need_ipsec;
 
+	/* 进行内层报文的分段。这里会把max_len设置为真正的mac_len + 外层报文长度，
+	 * 从而保证在分段过程中，会有这么长的空间预留。
+	 *
+	 * 这里在调用上层的钩子函数封包的时候，传递的features是取得当前硬件设备上的
+	 * hw_enc_features特性。
+	 */
+
 	if (unlikely(!pskb_may_pull(skb, tnl_hlen)))
 		goto out;
 
@@ -645,6 +652,10 @@ static struct sk_buff *udp4_ufo_fragment(struct sk_buff *skb,
 	__wsum csum;
 	struct udphdr *uh;
 	struct iphdr *iph;
+
+	/* UDP的GSO分段函数。这里会先检查当前的skb是不是overlay报文，如果是的话，就会
+	 * 调用 skb_udp_tunnel_segment 来进行隧道分段，而不是UDP协议层的分片。
+	 */
 
 	if (skb->encapsulation &&
 	    (skb_shinfo(skb)->gso_type &

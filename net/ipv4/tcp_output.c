@@ -196,8 +196,14 @@ static void tcp_event_data_sent(struct tcp_sock *tp,
 
 	tp->lsndtime = now;
 
-	/* If it is a reply for ato after last received
-	 * packet, increase pingpong count.
+	/* 这里看起来是想进行pingpong的自动识别。如果最近三次发送的报文的时间都小于
+	 * delack的超时时间，那么就进入到pingpong模式。
+	 *
+	 * 每次收到新的（不包括乱序的）数据的时候，tcp_event_data_recv里面都会更新
+	 * 这个lrcvtime时间。
+	 * 
+	 * 这里的逻辑，简单来说就是检查这次发送数据和上次收到数据的间隔是否足够短。如果
+	 * 多次都足够短的话，就进入pingpong模式。
 	 */
 	if ((u32)(now - icsk->icsk_ack.lrcvtime) < icsk->icsk_ack.ato)
 		inet_csk_inc_pingpong_cnt(sk);
@@ -4595,6 +4601,14 @@ void tcp_send_delayed_ack(struct sock *sk)
 	int ato = icsk->icsk_ack.ato;
 	unsigned long timeout;
 
+	/* 进行延迟ack的处理。这里已经包含了pingpong模式的处理。如果处于pingpong模式，
+	 * 那么max_ato就是TCP_DELACK_MAX（200ms）；否则，max_ato是500ms。
+	 *
+	 * 最后的ato的上限值是：
+	 *   min(max(rtt, DELAY_MIN), max_ato)
+	 * 
+	 * 可以理解为，ato取的是在[DELAY_MIN, min(rtt, DELAY_MAX)]范围内的。
+	 */
 	if (ato > TCP_DELACK_MIN) {
 		const struct tcp_sock *tp = tcp_sk(sk);
 		int max_ato = HZ / 2;
@@ -4620,6 +4634,9 @@ void tcp_send_delayed_ack(struct sock *sk)
 		ato = min(ato, max_ato);
 	}
 
+	/* 这里会再取一下，ato不大于DELAY_MAX（这个可以通过BPF修改）。那么上面的
+	 * 500ms又有什么意义呢？
+	 */
 	ato = min_t(u32, ato, tcp_delack_max(sk));
 
 	/* Stay within the limit we were given */
@@ -4628,6 +4645,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 	/* Use new timeout only if there wasn't a older one earlier. */
 	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
 		/* If delack timer is about to expire, send ACK now. */
+		/* 原来的超时时间，相比于现在，已经过去了3/4,那么将直接发送ack */
 		if (time_before_eq(icsk_delack_timeout(icsk), jiffies + (ato >> 2))) {
 			tcp_send_ack(sk);
 			return;

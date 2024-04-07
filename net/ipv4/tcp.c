@@ -3516,7 +3516,9 @@ int tcp_disconnect(struct sock *sk, int flags)
 	struct request_sock *req;
 	u32 seq;
 
-	/* 异常TCP套接口关闭，即采用RESET的方式来进行关闭和资源释放，不进行四次挥手。 */
+	/* 异常TCP套接口关闭，即采用RESET的方式来进行关闭和资源释放，不进行四次挥手。
+	 * 需要注意，如果当前的套接口的状态是SYN_SEND，那么是不会主动发送rst报文的。
+	 */
 
 	if (old_state != TCP_CLOSE)
 		tcp_set_state(sk, TCP_CLOSE);
@@ -3834,6 +3836,15 @@ void tcp_sock_set_nodelay(struct sock *sk)
 }
 EXPORT_SYMBOL(tcp_sock_set_nodelay);
 
+/* 内核里面的quickack模式和pingpong模式是互斥的。pingpong模式，指的是数据交互的双方
+ * 在进行数据交互的时候，每个报文都携带数据（你给我发一个，我给你发一个）。这种情况下，
+ * 会延迟ack的发送，等待数据和ack一起发送。
+ * 
+ * quickack模式和pingpong恰恰相反。看下面的代码，在进行这个系统调用的时候，会触发
+ * delack的检查，并在需要的时候发送ack报文。看样子，这个只能触发一次哦。
+ * 
+ * 如果是2的话，那么触发ack的时候，会同时进入到pingpong模式。
+ */
 static void __tcp_sock_set_quickack(struct sock *sk, int val)
 {
 	if (!val) {

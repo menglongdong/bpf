@@ -100,6 +100,9 @@ enum {
 #define TCP_DEFER_ACCEPT	9	/* Wake up listener only when data arrive */
 #define TCP_WINDOW_CLAMP	10	/* Bound advertised window */
 #define TCP_INFO		11	/* Information about this connection. */
+/* 如果将这个设置为0，那么会进入到pingpong模式，这种情况下如果套接口处于SYN_SEND状态，是
+ * 不会立马回复ack报文的。
+ */
 #define TCP_QUICKACK		12	/* Block/reenable quick acks */
 #define TCP_CONGESTION		13	/* Congestion control algorithm */
 #define TCP_MD5SIG		14	/* TCP MD5 Signature (RFC2385) */

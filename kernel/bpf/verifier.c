@@ -3658,6 +3658,13 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 	if (ret)
 		return ret;
 
+	/* 遍历所有的指令，对于指令是函数调用的情况，将被调用的函数地址（offset）
+	 * 加入到subprog_info数组中。当前的主BPF函数会是第一个成员。
+	 *
+	 * 对于调用kfunc的情况，这里会根据imm中的kfunc的id找到其对应的BTF,再根据
+	 * name找到对应的函数的地址。最后，会将这些信息保存到env->prog->aux->kfunc_tab
+	 * 中。
+	 */
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn) &&
 		    !bpf_pseudo_kfunc_call(insn))
@@ -3677,6 +3684,10 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 			return ret;
 	}
 
+	/* 找到BPF程序异常处理（主要就是page fault异常）函数。然后将这个函数的idx
+	 * 保存到env->exception_callback_subprog中，并将其标记为异常处理回调
+	 * 函数。
+	 */
 	ret = bpf_find_exception_callback_insn_off(env);
 	if (ret < 0)
 		return ret;
@@ -19676,14 +19687,19 @@ static int check_btf_info(struct bpf_verifier_env *env,
 		return 0;
 	}
 
+	/* 检查BTF传递过来的子函数和自动识别的子函数是否一致 */
 	err = check_btf_func(env, attr, uattr);
 	if (err)
 		return err;
 
+	/* 这个应该是debug用的吧，它将BPF指令对应的代码行关联起来 */
 	err = check_btf_line(env, attr, uattr);
 	if (err)
 		return err;
 
+	/* 根据用户态传递过来的CORE信息，进行指令的CORE。这个应该是别的用途的，真正
+	 * 的CORE在用户态的时候就已经完成了的。
+	 */
 	err = check_core_relo(env, attr, uattr);
 	if (err)
 		return err;
@@ -26207,6 +26223,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (!env)
 		return -ENOMEM;
 
+	/* 下面的代码是进行一些BPF检查器的准备工作，包括初始化env对象、获取BTF
+	 * 信息等。
+	 */
 	env->bt.env = env;
 
 	len = (*prog)->len;
@@ -26278,22 +26297,36 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		INIT_LIST_HEAD(&env->explored_states[i]);
 	INIT_LIST_HEAD(&env->free_list);
 
+	/* 检查并初始化当前prog对应的BTF实例 */
 	ret = check_btf_info_early(env, attr, uattr);
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* 初始化所有的subprog实例，并查找所有的使用到的kfunc的信息 */
 	ret = add_subprog_and_kfunc(env);
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* 对所有的subprog进行基本的指令合法性检查，比如跳转类指令不能超过当前函数
+	 * 范围；同时，初始化一些当前subprog的信息，比如是否调用过bpf_tail_call
+	 * 等；最后一条指令必须是exit或者jmp指令。
+	 */
 	ret = check_subprogs(env);
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* BTF相关的一些基本检查 */
 	ret = check_btf_info(env, attr, uattr);
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* 处理各种伪指令的情况。对于内存加载类指令，其根据src reg的值可以标记
+	 * 当前指令要操作的对象，比如：子函数、btf、map fd、map value等。
+	 * 这里会针对每一种情况，进行合法性检查，并初始化（修正）其中的信息。
+	 * 
+	 * 对于btf id,其只能指定KIND_VAR和KIND_FUNC类型的btf type；对于map,这里
+	 * 会根据map的fd找到对应的map对象，并将其保存下来，作为使用过的maps。
+	 */
 	ret = resolve_pseudo_ldimm64(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -26304,6 +26337,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 			goto skip_full_check;
 	}
 
+	/* 基于深度优先算法来对BPF程序中的loop进行检查。这里检查的逻辑是：在有向图
+	 * 中存在往后走的指令。
+	 */
 	ret = check_cfg(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -26315,7 +26351,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	ret = bpf_stack_liveness_init(env);
 	if (ret)
 		goto skip_full_check;
-
+	/* 基于 BTF 校验 attach 目标（主要针对 trampoline 类程序）。 */
 	ret = check_attach_btf_id(env);
 	if (ret)
 		goto skip_full_check;

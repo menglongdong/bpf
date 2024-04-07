@@ -2675,7 +2675,9 @@ unsigned long ftrace_get_addr_new(struct dyn_ftrace *rec)
 	struct ftrace_ops *ops;
 	unsigned long addr;
 
-	/* 查找当前record将要使用的处理函数。 */
+	/* 查找当前record将要使用的处理函数。如果当前的函数注册了direct_call，并且只有
+	 * 一个处理函数，那么这里会直接将call这个函数作为nop指令的替换。
+	 */
 
 	if ((rec->flags & FTRACE_FL_DIRECT) &&
 	    (ftrace_rec_count(rec) == 1)) {
@@ -6090,6 +6092,10 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 
 	/* Make sure requested entries are not already registered.. */
 	size = 1 << hash->size_bits;
+	/* 遍历当前ops对应的filter哈希表（目标内核函数）中所有的地址，确保当前跟踪的
+	 * 目标地址没有注册到direct_functions哈希表中。目前，trampoline和function
+	 * 是一对一的，因此这里就是为了确认当前function没有被注册过。
+	 */
 	for (i = 0; i < size; i++) {
 		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
 			if (ftrace_find_rec_direct(entry->ip))
@@ -6097,6 +6103,7 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 		}
 	}
 
+	/* 将当前trampoline的目标函数加入到direct_functions全局哈希表中。 */
 	err = -ENOMEM;
 
 	/* Make a copy hash to place the new and the old entries in */

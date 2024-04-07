@@ -58,6 +58,10 @@ void iptunnel_xmit(struct sock *sk, struct rtable *rt, struct sk_buff *skb,
 	struct iphdr *iph;
 	int err;
 
+	/* 构造IP头部，并进行报文的发送。这里可以看出来，这里发送的时候是从 LOCAL_OUT
+	 * 之前的位置开始发送的，相当于是IP层协议的起点。
+	 */
+
 	skb_scrub_packet(skb, xnet);
 
 	skb_clear_hash_if_not_l4(skb);

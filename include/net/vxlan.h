@@ -321,6 +321,9 @@ struct vxlan_dev {
 #define VXLAN_F_UDP_ZERO_CSUM_TX	0x40
 #define VXLAN_F_UDP_ZERO_CSUM6_TX	0x80
 #define VXLAN_F_UDP_ZERO_CSUM6_RX	0x100
+/* 远程csum支持，好像是使用外层的协议上的csum来代表内层的csum的。这个需要
+ * 两端都支持才行。
+ */
 #define VXLAN_F_REMCSUM_TX		0x200
 #define VXLAN_F_REMCSUM_RX		0x400
 #define VXLAN_F_GBP			0x800

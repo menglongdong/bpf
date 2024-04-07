@@ -336,6 +336,15 @@ void tcp_delack_timer_handler(struct sock *sk)
 	}
 	icsk->icsk_ack.pending &= ~ICSK_ACK_TIMER;
 
+	/* 延迟ack定时器超时的处理逻辑。如果当前不是在pingpong模式，那么将ato时间
+	 * 扩大1倍（不超过rto）。这样的话，就会尽量尝试进入到pingpong模式。
+	 *
+	 * 如果当前处于pingpong模式，说明这里数据发送不及时，pingpong模式miss了。这种
+	 * 情况下，退出pingpong模式，同时将ato重置为初始值40ms。
+	 * 
+	 * 除了这里，每次收到数据的时候也会进行ato的更新，那里是根据delta时间来
+	 * 进行更新的。
+	 */
 	if (inet_csk_ack_scheduled(sk)) {
 		if (!inet_csk_in_pingpong_mode(sk)) {
 			/* Delayed ACK missed: inflate ATO. */

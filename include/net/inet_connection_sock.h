@@ -125,6 +125,7 @@ struct inet_connection_sock {
 				  lrcv_flowlabel:20, /* last received ipv6 flowlabel	   */
 				  dst_quick_ack:1, /* cache dst RTAX_QUICKACK		   */
 				  unused:3;
+		/* 上一次收到数据报文的时间戳 */
 		__u32		  lrcvtime;	 /* timestamp of last received data packet */
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */

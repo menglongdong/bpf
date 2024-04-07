@@ -790,6 +790,9 @@ struct bpf_verifier_env {
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	const struct bpf_line_info *prev_linfo;
 	struct bpf_verifier_log log;
+	/* 根据BPF程序中的指令访问，自动识别出来的函数。这个和func_info是配合
+	 * 使用的，那个是根据BTF信息来识别的。
+	 */
 	struct bpf_subprog_info subprog_info[BPF_MAX_SUBPROGS + 2]; /* max + 2 for the fake and exception subprogs */
 	union {
 		struct bpf_idmap idmap_scratch;

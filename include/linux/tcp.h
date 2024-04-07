@@ -389,7 +389,9 @@ struct tcp_sock {
 				 */
 	struct {
 		u32	rtt_us;
+		/* 上一次收到数据的序列号 */
 		u32	seq;
+		/* 上一次收到数据的时间戳 */
 		u64	time;
 	} rcv_rtt_est;
 /* Receiver queue space */

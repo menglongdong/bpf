@@ -735,6 +735,9 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr_unsized *uaddr,
 		break;
 	}
 
+	/* 对于noblock方式进行的connect，可以看出来这里在进行connect的时候的timeo
+	 * 是0。这也意味着connect系统调用会直接返回 -EINPROGRESS的错误码。
+	 */
 	timeo = sock_sndtimeo(sk, flags & O_NONBLOCK);
 
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
@@ -1449,7 +1452,9 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 		udpfrag = !!(skb_shinfo(skb)->gso_type & SKB_GSO_UDP);
 
 	ops = rcu_dereference(inet_offloads[proto]);
-	/* 调用四层钩子函数来进行四层协议的分段 */
+	/* 调用四层钩子函数来进行四层协议的分段，对于UDP协议这里是 udp4_ufo_fragment ，
+	 * 对于TCP协议，这里是 tcp4_gso_segment
+	 */
 	if (likely(ops && ops->callbacks.gso_segment)) {
 		segs = ops->callbacks.gso_segment(skb, features);
 		if (!segs)

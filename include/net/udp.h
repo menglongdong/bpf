@@ -261,6 +261,7 @@ static inline __wsum udp_csum(struct sk_buff *skb)
 	return csum;
 }
 
+/* 计算反向UDP校验和，主要用于计算伪首部 */
 static inline __sum16 udp_v4_check(int len, __be32 saddr,
 				   __be32 daddr, __wsum base)
 {

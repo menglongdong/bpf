@@ -248,6 +248,12 @@
 #define CHECKSUM_NONE		0
 #define CHECKSUM_UNNECESSARY	1
 #define CHECKSUM_COMPLETE	2
+/* 代表着这个报文需要经过nic的offload校验和计算。如果没有设置成这个值，那么在GSO阶段
+ * 就会走到csum的软件计算逻辑，除非当前的ip_csum是CHECKSUM_UNNECESSARY。
+ *
+ * 这个模式的语义是部分计算，内核会把伪首部计算好放到TCP/UDP报文的check数据中。
+ * 这个时候里面放的csum是正向的，后面网卡在进行csum计算的时候会以这个为基础来进行。
+ */
 #define CHECKSUM_PARTIAL	3
 
 /* Maximum value in skb->csum_level */
@@ -1062,7 +1068,9 @@ struct sk_buff {
 	union {
 		__wsum		csum;
 		struct {
+			/* 数据段中计算校验和开始的地方 */
 			__u16	csum_start;
+			/* 数据段中保存校验和的字段的偏移 */
 			__u16	csum_offset;
 		};
 	};
