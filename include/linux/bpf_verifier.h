@@ -114,6 +114,9 @@ struct bpf_reg_state {
 	 * from the pointed-to object, and is shared with all bpf_reg_states
 	 * with the same id as us.
 	 */
+	/* 对于scalar类型的变量，这个用于trace这个变量的范围；对于指针类型的变量，
+	 * 这个用于跟踪相对于那个指针的偏移。
+	 */
 	struct tnum var_off;
 	/* Used to determine if any memory access using this register will
 	 * result in a bad access.

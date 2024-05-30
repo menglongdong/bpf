@@ -1388,7 +1388,10 @@ enum {
  * verifier type:    PTR_TO_FUNC.
  */
 /* 内存读取指令（imm），且源寄存器是BPF_PSEUDO_FUNC，说明imm中存储的是指向函数
- * 的指针（BPF程序中的函数）。
+ * 的指针（BPF程序中的函数）。在编译期间，只有insn[0].imm是到目标函数的指令偏移
+ * 量。在检查器阶段，会根据偏移遭到对应的subprog,并在jit完成后，将subprog的真实
+ * 地址修正进去。这个一般是用于callback函数的。这个subprog必须要是static类型的，
+ * 且当前要支持BTF。
  */
 #define BPF_PSEUDO_FUNC		4
 

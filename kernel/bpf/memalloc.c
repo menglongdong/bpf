@@ -526,6 +526,9 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 	ma->percpu = percpu;
 
 	if (size) {
+		/* 分配map内存的情况，此时会分配一个percpu类型的bpf_mem_cache
+		 * 结构体。
+		 */
 		pc = __alloc_percpu_gfp(sizeof(*pc), 8, GFP_KERNEL);
 		if (!pc)
 			return -ENOMEM;
