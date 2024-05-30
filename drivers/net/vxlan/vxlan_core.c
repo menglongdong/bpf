@@ -2225,7 +2225,13 @@ static int vxlan_build_skb(struct sk_buff *skb, struct dst_entry *dst,
 	int min_headroom;
 	int err;
 
-	/* 为vxlan报文头部开辟空间 */
+	/* 为vxlan报文头部开辟空间。同时，初始化内部的header偏移。如果内层报文没有使用
+	 * csum卸载，那么将skb->encapsulation设置为0，以免驱动误将内层报文的csum
+	 * 进行卸载（当我们想要将外层报文进行卸载的时候）。
+	 * 
+	 * 这里可以看出来，可以通过skb->encapsulation来判断当前csum卸载是否是内层
+	 * 报文。这里是告诉驱动，不要将这个报文当做一个封包报文进行处理，直接处理即可。
+	 */
 
 	if ((vxflags & VXLAN_F_REMCSUM_TX) &&
 	    skb->ip_summed == CHECKSUM_PARTIAL) {
@@ -2764,10 +2770,21 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	u32 nhid = 0;
 	bool did_rsc;
 
+	/* vxlan网卡驱动默认的发包函数。 */
+
 	info = skb_tunnel_info(skb);
 
 	skb_reset_mac_header(skb);
 
+	/* 如果配置了VXLAN_F_COLLECT_METADATA这个选项，那么不进行转发表的查找，而是
+	 * 直接调用vxlan_xmit_one或者vxlan_xmit_nhid进行发送。
+	 *
+	 * 在vxlan_xmit_one函数中，如果传递了rdst信息，那么就采用rdst中的信息来进行
+	 * 封包；否则，则采用ip_tunnel_info中的信息来封包。
+	 * 
+	 * 创建vxlan的时候，如果指定了external这个选项，那么好像会设置这个metadata
+	 * 标志。
+	 */
 	if (vxlan->cfg.flags & VXLAN_F_COLLECT_METADATA) {
 		if (info && info->mode & IP_TUNNEL_INFO_BRIDGE &&
 		    info->mode & IP_TUNNEL_INFO_TX) {
@@ -2782,6 +2799,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 	}
 
+	/* 配置了arp代理的情况，这里会额外处理arp报文 */
 	if (vxlan->cfg.flags & VXLAN_F_PROXY) {
 		eth = eth_hdr(skb);
 		if (ntohs(eth->h_proto) == ETH_P_ARP)
@@ -2803,6 +2821,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (nhid)
 		return vxlan_xmit_nhid(skb, dev, nhid, vni);
 
+	/* 针对多播的，可以选择性的将报文发到某些vtep */
 	if (vxlan->cfg.flags & VXLAN_F_MDB) {
 		struct vxlan_mdb_entry *mdb_entry;
 
