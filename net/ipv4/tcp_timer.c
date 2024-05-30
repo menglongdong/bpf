@@ -663,6 +663,9 @@ void tcp_retransmit_timer(struct sock *sk)
 	/* 先进入LOSS状态，再重传超时的报文（如果拥塞控制允许的话）。 */
 	tcp_enter_loss(sk);
 
+	/* 这里会对icsk_retransmits进行+1操作。从这里看，icsk_retransmits和
+	 * icsk_backoff的作用有点类似哦。
+	 */
 	tcp_update_rto_stats(sk);
 	if (tcp_retransmit_skb(sk, tcp_rtx_queue_head(sk), 1) > 0) {
 		/* Retransmission failed because of local congestion,
@@ -704,6 +707,9 @@ out_reset_timer:
 	    (tp->thin_lto || READ_ONCE(net->ipv4.sysctl_tcp_thin_linear_timeouts)) &&
 	    tcp_stream_is_thin(tp) &&
 	    icsk->icsk_retransmits <= TCP_THIN_LINEAR_RETRIES) {
+		/* 对于小流量的连接，如果开启了tcp_thin_linear_timeouts，那么在重传
+		 * 6次之前，不使用backoff的逻辑，而是使用固定的超时时间。
+		 */
 		icsk->icsk_backoff = 0;
 		icsk->icsk_rto = clamp(__tcp_set_rto(tp),
 				       tcp_rto_min(sk),

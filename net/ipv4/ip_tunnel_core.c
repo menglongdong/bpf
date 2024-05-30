@@ -422,6 +422,7 @@ int skb_tunnel_check_pmtu(struct sk_buff *skb, struct dst_entry *encap_dst,
 {
 	u32 mtu = dst_mtu(encap_dst) - headroom;
 
+	/* 对于GSO类型的skb，这里会检查每个段的长度是不是都满足MTU的要求。 */
 	if ((skb_is_gso(skb) && skb_gso_validate_network_len(skb, mtu)) ||
 	    (!skb_is_gso(skb) && (skb->len - skb_network_offset(skb)) <= mtu))
 		return 0;

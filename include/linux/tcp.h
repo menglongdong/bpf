@@ -256,6 +256,7 @@ struct tcp_sock {
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
 	/* 平滑版本的 mdev_max */
 	u32	rttvar_us;	/* smoothed mdev_max			*/
+	/* 已经发送出去，还没被确认的重传数据 */
 	u32	retrans_out;	/* Retransmitted packets out		*/
 	u16	advmss;		/* Advertised MSS			*/
 	u16	urg_data;	/* Saved octet of OOB data and control flags */
@@ -280,6 +281,9 @@ struct tcp_sock {
 				 */
 	u32	snd_sml;	/* Last byte of the most recently transmitted small packet */
 	u32	chrono_start;	/* Start time in jiffies of a TCP chrono */
+	/* 记录了TCP套接口处于各种状态的时间，包括BUSY（发送数据）、RWND_LIMITED（零窗口）
+	 * SND_LIMITED（发送窗口受限）等。
+	 */
 	u32	chrono_stat[3];	/* Time in jiffies for chrono_stat stats */
 	/* 要设置到下一个存放到发送队列的报文的序列号 */
 	u32	write_seq;	/* Tail(+1) of data held in tcp send buffer */
@@ -292,6 +296,10 @@ struct tcp_sock {
 	 */
 	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
 	u64	accecn_opt_tstamp;	/* Last AccECN option sent timestamp */
+	/* 每次发送报文的时候会被加入到这个队列，报文被ack或者sack后会被移除这个队列。
+	 * 报文被标记为lost也会被移除，再重传的时候又会被重新加入到这个队列。可以看
+	 * 出来，这个队列是按照发送顺序排列的。
+	 */
 	struct list_head tsorted_sent_queue; /* time-sorted sent but un-SACKed skbs */
 	struct sk_buff *highest_sack;   /* skb just after the highest
 					 * skb with SACKed bit set
@@ -322,9 +330,11 @@ struct tcp_sock {
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	/* 下一个要接收的数据 */
 	u32	rcv_nxt;	/* What we want to receive next		*/
-	/* 下一个要发送的数据，也就是当前窗口已发送的最后一个数据。*/
+	/* 下一个要发送的数据，也就是当前窗口已发送的最后一个数据。也可以理解为发送
+	 * 队列中的第一个数据。
+	 */
 	u32	snd_nxt;	/* Next sequence we send		*/
-	/* 当前发送窗口的第一个字节。*/
+	/* 当前发送窗口的第一个字节，也可以理解为重传队列中的第一个数据。*/
 	u32	snd_una;	/* First byte we want an ack for	*/
 	u32	window_clamp;	/* Maximal window to advertise		*/
 	/* 平滑版本的rtt，不至于导致单次rtt的波动引发rtt的大幅波动，按照
@@ -333,6 +343,7 @@ struct tcp_sock {
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
 	u32	packets_out;	/* Packets which are "in flight"	*/
 	u32	snd_up;		/* Urgent pointer		*/
+	/* 累计的被ack/sack的报文的数量 */
 	u32	delivered;	/* Total data packets delivered incl. rexmits */
 	u32	delivered_ce;	/* Like the above but only ECE marked packets */
 	u32	received_ce;	/* Like the above but for rcvd CE marked pkts */
@@ -340,6 +351,10 @@ struct tcp_sock {
 					* types: INET_ECN_ECT_1, INET_ECN_ECT_0,
 					* and INET_ECN_CE
 					*/
+	/* 代表当前的TCP传输是否是用户没有发送足够的数据下来导致带宽受限，这个值是在
+	 * 发现受限的时候已经被确认的数据量+in flight，即：
+	 *   app_limited - delivered = in flight
+	 */
 	u32	app_limited;	/* limited until "delivered" reaches this val */
 	/* 当前接收窗口的大小 */
 	u32	rcv_wnd;	/* Current receiver window		*/
@@ -376,6 +391,7 @@ struct tcp_sock {
 	u32	rcv_wup;	/* rcv_nxt on last window update sent	*/
 	u32	max_packets_out;  /* max packets_out in last window */
 	u32	cwnd_usage_seq;  /* right edge of cwnd usage tracking flight */
+	/* 根据对被确认的报文的采样计算（预估）出来的当前流的真实的带宽 */
 	u32	rate_delivered;    /* saved rate sample: packets delivered */
 	u32	rate_interval_us;  /* saved rate sample: time elapsed */
 	u32	rcv_rtt_last_tsecr;
@@ -408,6 +424,7 @@ struct tcp_sock {
  *	read the code and the spec side by side (and laugh ...)
  *	See RFC793 and RFC1122. The RFC writes these in capitals.
  */
+	/* 收到的DSACK确认的伪重传的段数 */
 	u32	dsack_dups;	/* RFC4898 tcpEStatsStackDSACKDups
 				 * total number of DSACK blocks received
 				 */
@@ -520,6 +537,7 @@ struct tcp_sock {
 	u64	bytes_retrans;	/* RFC4898 tcpEStatsPerfOctetsRetrans
 				 * Total data bytes retransmitted
 				 */
+	/* 当前套接口上总共重传的数据段的数量，减去伪重传的段数即可算出丢包重传的段数 */
 	u32	total_retrans;	/* Total retransmits for entire connection */
 	u32	rto_stamp;	/* Start time (ms) of last CA_Loss recovery */
 	u16	total_rto;	/* Total number of RTO timeouts, including
@@ -528,6 +546,7 @@ struct tcp_sock {
 	u16	total_rto_recoveries;	/* Total number of RTO recoveries,
 					 * including any unfinished recovery.
 					 */
+	/* 处于LOSS状态下的时间的总和，即每次进入LOST和退出LOST的时间差的和 */
 	u32	total_rto_time;	/* ms spent in (completed) RTO recoveries. */
 
 	u32	urg_seq;	/* Seq of received urgent pointer */

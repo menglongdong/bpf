@@ -4842,6 +4842,16 @@ BPF_CALL_4(bpf_skb_set_tunnel_key, struct sk_buff *, skb,
 	u8 compat[sizeof(struct bpf_tunnel_key)];
 	struct ip_tunnel_info *info;
 
+	/* 这个函数里面会构造metadata类型的路由缓存，并释放skb上当前的路由缓存，使用
+	 * 这里分配的per cpu类型的md。
+	 *
+	 * 在vxlan里面，会获取这个上面的md来封装vxlan头部（在开启了external模式的情况
+	 * 下）。
+	 * 
+	 * 这是不是意味着从egress到vxlan驱动，不能发生CPU睡眠，不能发生skb堆积到
+	 * qdisc队列？
+	 */
+
 	if (unlikely(flags & ~(BPF_F_TUNINFO_IPV6 | BPF_F_ZERO_CSUM_TX |
 			       BPF_F_DONT_FRAGMENT | BPF_F_SEQ_NUMBER |
 			       BPF_F_NO_TUNNEL_KEY)))

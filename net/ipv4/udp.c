@@ -1145,6 +1145,8 @@ void udp_set_csum(bool nocheck, struct sk_buff *skb,
 	} else {
 		/* 内层报文没有使用offload的方式，那么外层报文尝试使用offload的方式
 		 * 进行csum的计算。
+		 *
+		 * 这种情况下，skb->encapsulation是0。
 		 */
 		skb->ip_summed = CHECKSUM_PARTIAL;
 		skb->csum_start = skb_transport_header(skb) - skb->head;

@@ -287,6 +287,7 @@ static inline struct sk_buff *napi_skb_cache_get(bool alloc)
 	struct sk_buff *skb;
 
 	local_lock_nested_bh(&napi_alloc_cache.bh_lock);
+	/* skb的二层缓存，批量地进行skb的分配和释放。 */
 	if (unlikely(!nc->skb_count)) {
 		if (alloc)
 			nc->skb_count = kmem_cache_alloc_bulk(net_hotdata.skbuff_cache,

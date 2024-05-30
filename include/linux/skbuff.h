@@ -701,6 +701,9 @@ enum {
 
 	SKB_GSO_IPXIP6 = 1 << 9,
 
+	/* 当前skb是个基于UDP的隧道报文（vxlan）。这个和下面的区别在于，下面的那个需要
+	 * 计算外层UDP的校验和，这个类型的不需要。
+	 */
 	SKB_GSO_UDP_TUNNEL = 1 << 10,
 
 	SKB_GSO_UDP_TUNNEL_CSUM = 1 << 11,
@@ -1016,6 +1019,7 @@ struct sk_buff {
 	__u8			remcsum_offload:1;
 	__u8			csum_complete_sw:1;
 	__u8			csum_level:2;
+	/* 这个主要用于overlay报文，用于设置内层报文的L2层协议，如 ENCAP_TYPE_ETHER。 */
 	__u8			inner_protocol_type:1;
 
 	__u8			l4_hash:1;
@@ -1025,7 +1029,9 @@ struct sk_buff {
 	__u8			wifi_acked:1;
 #endif
 	__u8			no_fcs:1;
-	/* Indicates the inner headers are valid in the skbuff. */
+	/* 用于标识当前是否是个隧道报文。对于vxlan，这个在底层的时候，会根据这个值
+	 * 来决定是否调用 skb_udp_tunnel_segment 来进行报文的分段。
+	 */
 	__u8			encapsulation:1;
 	__u8			encap_hdr_csum:1;
 	/* 如果是COMPLETE模式，那么在校验通过（init）后会将这个属性设置为true */

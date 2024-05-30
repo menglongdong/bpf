@@ -208,6 +208,7 @@ enum
 	LINUX_MIB_TCPPARTIALUNDO,		/* TCPPartialUndo */
 	LINUX_MIB_TCPDSACKUNDO,			/* TCPDSACKUndo */
 	LINUX_MIB_TCPLOSSUNDO,			/* TCPLossUndo */
+	/* 重传已经被重传过的报文计数 */
 	LINUX_MIB_TCPLOSTRETRANSMIT,		/* TCPLostRetransmit */
 	LINUX_MIB_TCPRENOFAILURES,		/* TCPRenoFailures */
 	LINUX_MIB_TCPSACKFAILURES,		/* TCPSackFailures */

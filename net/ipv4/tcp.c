@@ -4376,6 +4376,8 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 	u64 rate64;
 	bool slow;
 
+	/* 使用ss命令获取TCP套接口的内部信息的函数。 */
+
 	memset(info, 0, sizeof(*info));
 	if (sk->sk_type != SOCK_STREAM)
 		return;
@@ -4385,6 +4387,7 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 	/* Report meaningful fields for all TCP states, including listeners */
 	rate = READ_ONCE(sk->sk_pacing_rate);
 	rate64 = (rate != ~0UL) ? rate : ~0ULL;
+	/* 直接取的套接口上的packing rate */
 	info->tcpi_pacing_rate = rate64;
 
 	rate = READ_ONCE(sk->sk_max_pacing_rate);
@@ -4485,6 +4488,7 @@ void tcp_get_info(struct sock *sk, struct tcp_info *info)
 	info->tcpi_bytes_retrans = tp->bytes_retrans;
 	info->tcpi_dsack_dups = tp->dsack_dups;
 	info->tcpi_reord_seen = tp->reord_seen;
+	/* 收到的总的乱序报文的数量 */
 	info->tcpi_rcv_ooopack = tp->rcv_ooopack;
 	info->tcpi_snd_wnd = tp->snd_wnd;
 	info->tcpi_rcv_wnd = tp->rcv_wnd;

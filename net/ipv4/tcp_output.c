@@ -3935,6 +3935,9 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 		} else {
 			/* 如果当前是LOSS状态，那么更新慢启动重传计数；
 			 * 否则，更新快速重传计数。
+			 *
+			 * 这是不是意味着，定时器超时重传是用的慢启动算法，其他的
+			 * 重传都是归类为快速重传。
 			 */
 			if (icsk->icsk_ca_state != TCP_CA_Loss)
 				mib_idx = LINUX_MIB_TCPFASTRETRANS;

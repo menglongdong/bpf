@@ -1178,7 +1178,8 @@ void tcp_update_pacing_rate(struct sock *sk)
 	 * 因为在srtt时间内一个拥塞窗口范围内的字节数可以完成传输。
 	 *
 	 * 在慢启动状态下，把速率设置为计算出来的2倍，因为此时真实的速率的可以比计算
-	 * 出来的大的。在拥塞避免阶段，设置为当前速率的1.2倍。
+	 * 出来的大的。在拥塞避免阶段，设置为当前速率的1.2倍。这个比例可以通过
+	 * tcp_pacing_ca_ratio和tcp_pacing_ss_ratio来调整。
 	 */
 
 	/* set sk_pacing_rate to 200 % of current rate (mss * cwnd / srtt) */
@@ -1376,6 +1377,10 @@ void tcp_mark_skb_lost(struct sock *sk, struct sk_buff *skb)
 
 	tcp_verify_retransmit_hint(tp, skb);
 	if (sacked & TCPCB_LOST) {
+		/* 再次标记一个已经被标记为丢包的报文。如果这个报文被重传过，说明重传
+		 * 的也失败了，这里会增加一个统计计数。同时，会移除上面的重传过的
+		 * 标记。重传在外数据会减去这个报文，因为认为它已经丢包了。
+		 */
 		if (sacked & TCPCB_SACKED_RETRANS) {
 			/* Account for retransmits that are lost again */
 			TCP_SKB_CB(skb)->sacked &= ~TCPCB_SACKED_RETRANS;
@@ -1385,6 +1390,7 @@ void tcp_mark_skb_lost(struct sock *sk, struct sk_buff *skb)
 			tcp_notify_skb_loss_event(tp, skb);
 		}
 	} else {
+		/* 将一个未重传过的报文标记为丢包。 */
 		tp->lost_out += tcp_skb_pcount(skb);
 		TCP_SKB_CB(skb)->sacked |= TCPCB_LOST;
 		tcp_notify_skb_loss_event(tp, skb);
@@ -2568,6 +2574,9 @@ static void tcp_timeout_mark_lost(struct sock *sk)
 	bool is_reneg;			/* is receiver reneging on SACKs? */
 
 	head = tcp_rtx_queue_head(sk);
+	/* 判断是否发生了食言，即一个被SACK的报文触发了重传定时器超时。这会导致重传
+	 * 队列中所有被SACK的报文都会被取消SACK状态，从而可以被标记为LOST。
+	 */
 	is_reneg = head && (TCP_SKB_CB(head)->sacked & TCPCB_SACKED_ACKED);
 	if (is_reneg) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPSACKRENEGING);
@@ -2587,7 +2596,8 @@ static void tcp_timeout_mark_lost(struct sock *sk)
 	 * 丢失。
 	 *
 	 * 如果sock采用的是rack来进行丢失的标记，那么优先采用rack算法，对于没有超时
-	 * 的报文，不进行LOST标记。
+	 * 的报文，不进行LOST标记。可以看出来，不支持rack的话，会标记重传队列中所有的
+	 * 报文为LOST状态。
 	 */
 	skb_rbtree_walk_from(skb) {
 		if (is_reneg)
@@ -3580,7 +3590,9 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 	switch (icsk->icsk_ca_state) {
 	case TCP_CA_Recovery:
 		if (!(flag & FLAG_SND_UNA_ADVANCED)) {
-			/* 如果snd_una没有改变，说明是个重复ack报文，增加SACKED计数 */
+			/* 如果snd_una没有改变，说明是个重复ack报文，如果不支持sack
+			 * （走的快传）的话，就增加SACKED计数
+			 */
 			if (tcp_is_reno(tp))
 				tcp_add_reno_sack(sk, num_dupack, ece_ack);
 				/* 确认了新数据后，尝试进行伪重传恢复。 */
@@ -3715,6 +3727,7 @@ static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 	 * always taken together with ACK, SACK, or TS-opts. Any negative
 	 * values will be skipped with the seq_rtt_us < 0 check above.
 	 */
+	/* 使用 ca_rtt_us 来作为rtt_min */
 	tcp_update_rtt_min(sk, ca_rtt_us, flag);
 	/* 利用当前ACK报文确认的第一个skb的时间戳来更新rtt */
 	tcp_rtt_estimator(sk, seq_rtt_us);
@@ -5953,6 +5966,8 @@ static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb,
 
 	/* 尝试进行skb的合并。一些情况下是没法合并的，比如skb曾经克隆过，这个时候
 	 * skb里的data是共享的，不能合并。
+	 *
+	 * fragstolen代表把skb的头部的数据拷贝到了tail的frags里了。
 	 */
 	eaten = (tail &&
 		 tcp_try_coalesce(sk, tail,

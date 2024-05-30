@@ -123,6 +123,7 @@ static void softnet_seq_stop(struct seq_file *seq, void *v)
 static int softnet_seq_show(struct seq_file *seq, void *v)
 {
 	struct softnet_data *sd = v;
+	/* backlog队列长度 */
 	u32 input_qlen = softnet_input_pkt_queue_len(sd);
 	u32 process_qlen = softnet_process_queue_len(sd);
 	unsigned int flow_limit_count = 0;

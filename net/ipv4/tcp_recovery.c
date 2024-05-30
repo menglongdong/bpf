@@ -148,6 +148,9 @@ void tcp_newreno_mark_lost(struct sock *sk, bool snd_una_advanced)
 	 * 触发这里的标记：
 	 * 1. dup ack达到了一定的数量
 	 * 2. 当前处于recover状态，且当前的ack确认了新数据
+	 *
+	 * 从这里可以看出来，只有在第一次快传发生的时候，才会标记丢包。如果重传的报文
+	 * 又丢包了，这里是不会进行再次标记的。
 	 */
 
 	if ((state < TCP_CA_Recovery && tp->sacked_out >= tp->reordering) ||

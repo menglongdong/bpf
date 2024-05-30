@@ -4814,6 +4814,8 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	 * 如果定义了EGRESS类型的队列，那么将其交给EGRESS处理。
 	 * 这种类型的队列不进行任何流量控制，单纯地为EBPF留下
 	 * HOOK点而已。
+	 *
+	 * 可以看出来，egress类型的qdisc会先于正常的qdisc执行。
 	 */
 	if (static_branch_unlikely(&egress_needed_key)) {
 		if (nf_hook_egress_active()) {

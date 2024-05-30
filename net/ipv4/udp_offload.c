@@ -246,7 +246,7 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 			features |= NETIF_F_HW_CSUM;
 	}
 
-	/* segment inner packet. */
+	/* 对内层报文进行分段。对于vxlan，这里一般为 skb_mac_gso_segment 。 */
 	segs = gso_inner_segment(skb, features);
 	if (IS_ERR_OR_NULL(segs)) {
 		skb_gso_error_unwind(skb, protocol, tnl_hlen, mac_offset,
@@ -265,7 +265,14 @@ static struct sk_buff *__skb_udp_tunnel_segment(struct sk_buff *skb,
 		if (remcsum)
 			skb->ip_summed = CHECKSUM_NONE;
 
-		/* Set up inner headers if we are offloading inner checksum */
+		/* 软件分段之后，内层的报文还是采用了csum卸载的方式。这种情况下，将其
+		 * 还原为一个封包报文。
+		 *
+		 * 其他的，还原所有的skb上的信息为外层报文的信息。这个时候，内层报文
+		 * 就是普通的数据报文（csum没有卸载）。外层报文在内层csum不offload
+		 * 且支持UDP报文的csum卸载的情况下，会进行UDP的offload。否则，直接
+		 * 计算出UDP的csum。
+		 */
 		if (skb->ip_summed == CHECKSUM_PARTIAL) {
 			skb_reset_inner_headers(skb);
 			skb->encapsulation = 1;
@@ -327,11 +334,14 @@ struct sk_buff *skb_udp_tunnel_segment(struct sk_buff *skb,
 	rcu_read_lock();
 
 	switch (skb->inner_protocol_type) {
+	/* 这个是基于ETH的overlay网络报文 */
 	case ENCAP_TYPE_ETHER:
 		protocol = skb->inner_protocol;
 		gso_inner_segment = skb_mac_gso_segment;
 		break;
+	/* 这个是基于L3的overlay报文 */
 	case ENCAP_TYPE_IPPROTO:
+		/* 对于TCP协议，这里是 tcpv4_offload */
 		offloads = is_ipv6 ? inet6_offloads : inet_offloads;
 		ops = rcu_dereference(offloads[skb->inner_ipproto]);
 		if (!ops || !ops->callbacks.gso_segment)
@@ -670,6 +680,7 @@ static struct sk_buff *udp4_ufo_fragment(struct sk_buff *skb,
 	if (!pskb_may_pull(skb, sizeof(struct udphdr)))
 		goto out;
 
+	/* 这个是常规的UDP报文分段路径。 */
 	if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)
 		return __udp_gso_segment(skb, features, false);
 

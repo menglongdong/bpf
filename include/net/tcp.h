@@ -1308,6 +1308,9 @@ struct tcp_congestion_ops {
 	void (*cong_control)(struct sock *sk, u32 ack, int flag, const struct rate_sample *rs);
 
 	/* return slow start threshold (required) */
+	/* 计算慢启动阈值。在进入到RECOVERY状态的时候，也是调用这个函数来决定要回退的
+	 * 阈值的。
+	 */
 	u32 (*ssthresh)(struct sock *sk);
 
 	/* call before changing ca_state (optional) */
@@ -1423,6 +1426,7 @@ static inline void tcp_ca_event(struct sock *sk, const enum tcp_ca_event event)
 void tcp_set_ca_state(struct sock *sk, const u8 ca_state);
 
 
+/* 判断t1是在t2之后发送的 */
 static inline bool tcp_skb_sent_after(u64 t1, u64 t2, u32 seq1, u32 seq2)
 {
 	return t1 > t2 || (t1 == t2 && after(seq1, seq2));

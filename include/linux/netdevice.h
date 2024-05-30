@@ -3524,18 +3524,23 @@ static inline void numa_drop_reset(struct numa_drop_counters *ndc)
  */
 struct softnet_data {
 	struct list_head	poll_list;
+	/* 每次会先把backlog队列的数据放到这个队列中，再处理 */
 	struct sk_buff_head	process_queue;
 	local_lock_t		process_queue_bh_lock;
 
 	/* stats */
+	/* 当前核上收包处理的报文的数量 */
 	unsigned int		processed;
+	/* 软中断的配额耗尽的次数 */
 	unsigned int		time_squeeze;
 #ifdef CONFIG_RPS
 	struct softnet_data	*rps_ipi_list;
 #endif
 
 	unsigned int		received_rps;
+	/* 收包软中断的状态，判断当前收包是否处理完了 */
 	bool			in_net_rx_action;
+	/* 是否处于napi poll的状态 */
 	bool			in_napi_threaded_poll;
 
 #ifdef CONFIG_NET_FLOW_LIMIT
@@ -3553,7 +3558,7 @@ struct softnet_data {
 	/* input_queue_head should be written by cpu owning this struct,
 	 * and only read by other cpus. Worth using a cache line.
 	 */
-	/* 当前的CPU所处理的backlog上的报文数量，没处理完一个就行给这个计数器+1 */
+	/* 当前的CPU所处理的backlog上的报文数量，每处理完一个就行给这个计数器+1 */
 	unsigned int		input_queue_head ____cacheline_aligned_in_smp;
 
 	/* Elements below can be accessed between CPUs for RPS/RFS */
@@ -3569,10 +3574,12 @@ struct softnet_data {
 	long			pad[3] ____cacheline_aligned_in_smp;
 	unsigned int		input_queue_tail;
 #endif
+	/* backlog队列 */
 	struct sk_buff_head	input_pkt_queue;
 
 	struct napi_struct	backlog;
 
+	/* backlog 入队失败导致的丢包计数（按 NUMA 维度统计）。 */
 	struct numa_drop_counters drop_counters;
 
 	int			defer_ipi_scheduled ____cacheline_aligned_in_smp;

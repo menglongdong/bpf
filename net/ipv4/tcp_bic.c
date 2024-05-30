@@ -161,6 +161,9 @@ static void bictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 		if (!acked)
 			return;
 	}
+	/* 这里不是用来设置拥塞窗口的，只是更新一些bic要用到的信息。拥塞窗口的更新是
+	 * 按照标准的拥塞避免算法更新的。
+	 */
 	bictcp_update(ca, tcp_snd_cwnd(tp));
 	tcp_cong_avoid_ai(tp, ca->cnt, acked);
 }
@@ -173,6 +176,14 @@ static u32 bictcp_recalc_ssthresh(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct bictcp *ca = inet_csk_ca(sk);
+
+	/* 对于bic算法，如果发生了网络拥塞，那么就设置慢启动阈值为：
+	 *   (cwnd * 812 / 1024)
+	 *
+	 * 这个算法看起来比较保守，没有将ssh设置为0.5 * cwnd。
+	 * 
+	 * 每次丢包，都会将ssh设置为cwnd，直到ssh到达16。
+	 */
 
 	ca->epoch_start = 0;	/* end of epoch */
 
