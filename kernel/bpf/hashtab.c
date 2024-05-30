@@ -557,8 +557,6 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	if (!htab)
 		return ERR_PTR(-ENOMEM);
 
-	lockdep_register_key(&htab->lockdep_key);
-
 	/* 将用户态传递的参数拷贝到map上 */
 	bpf_map_init_from_attr(&htab->map, attr);
 
