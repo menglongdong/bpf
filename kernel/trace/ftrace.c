@@ -9086,6 +9086,10 @@ static int prepare_direct_functions_for_ipmodify(struct ftrace_ops *ops)
 
 	lockdep_assert_held_once(&direct_mutex);
 
+	/* 针对开启了ip_modify选项的ops做额外的检查，包括确保当前的ops里面的函数
+	 * 没有别的也开启了ip_modify的ops。如果存在这样的ops，那么调用这个ops的
+	 * 钩子函数来将这个事件传递过去，让它知道。
+	 */
 	if (!(ops->flags & FTRACE_OPS_FL_IPMODIFY))
 		return 0;
 

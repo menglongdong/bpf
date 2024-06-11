@@ -1685,13 +1685,16 @@ kprobe_perf_func(struct trace_kprobe *tk, struct pt_regs *regs)
 
 		ret = trace_call_bpf(call, regs);
 
-		/*
-		 * We need to check and see if we modified the pc of the
-		 * pt_regs, and if so return 1 so that we don't do the
-		 * single stepping.
+		/* bpf_override_return实现的地方，在调用BPF程序之后，如果当前
+		 * regs上存储的ip地址发生了变化，那么就说明进行了override_return
+		 * 需要进行额外的处理。这里返回值为1的话，会导致post_handler被
+		 * 跳过执行，同时
 		 */
 		if (orig_ip != instruction_pointer(regs))
 			return 1;
+		/* 这里如果BPF程序返回值是0的话，那么就会结束当前处理，不上报这个
+		 * 事件。可以看出来，一般都要返回0来劫持这个事件。
+		 */
 		if (!ret)
 			return 0;
 	}

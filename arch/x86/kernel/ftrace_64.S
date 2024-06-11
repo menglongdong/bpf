@@ -214,6 +214,7 @@ SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
 	/* Load the ftrace_ops into the 3rd parameter */
 	movq function_trace_op(%rip), %rdx
 
+	/* 将寄存器中的值按照pt_regs的格式保存到栈中，rsp是pt_regs的起始地址 */
 	/* Save the rest of pt_regs */
 	movq %r15, R15(%rsp)
 	movq %r14, R14(%rsp)
@@ -251,6 +252,10 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	movq %rax, MCOUNT_REG_SIZE(%rsp)
 
 	/* Handlers can change the RIP */
+	/* 经过处理后，将pt_regs中的rip保存下来，放到当前栈帧的return ip的位置。
+	 * 通过这种方式，可以实现当前handler处理完成后，直接跳转到目标指令的作
+	 * 用，从而可以跳过origin函数。
+	 */
 	movq RIP(%rsp), %rax
 	movq %rax, MCOUNT_REG_SIZE+8(%rsp)
 
@@ -274,6 +279,7 @@ SYM_INNER_LABEL(ftrace_regs_caller_jmp, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	jnz	1f
 
+	/* 在调用完handler处理且恢复了所有的寄存器的状态后，尝试执行direct call */
 	restore_mcount_regs
 	/* Restore flags */
 	popfq

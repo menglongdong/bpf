@@ -110,6 +110,9 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
 	unsigned int ret;
 
+	/* kprobe的handler里面会调用这个函数来处理当前函数上hook的BPF程序。这个是
+	 * trace kprobe框架来调用的，它的kprobe更上层一些的东西。
+	 */
 	cant_sleep();
 
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
@@ -155,7 +158,11 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 #ifdef CONFIG_BPF_KPROBE_OVERRIDE
 BPF_CALL_2(bpf_override_return, struct pt_regs *, regs, unsigned long, rc)
 {
+	/* 设置返回值到寄存器中。对于x86架构，这里是ax(r0)寄存器 */
 	regs_set_return_value(regs, rc);
+	/* 设置ip寄存器的值，使其指向汇编函数 just_return_func。这里本来存储
+	 * 的是被插桩位置的下一条执行指令。
+	 */
 	override_function_with_return(regs);
 	return 0;
 }

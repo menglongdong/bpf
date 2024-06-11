@@ -282,6 +282,7 @@ static __always_inline unsigned long kernel_stack_pointer(struct pt_regs *regs)
 	return regs->sp;
 }
 
+/* 返回寄存器中要执行的下一条指令地址。 */
 static __always_inline unsigned long instruction_pointer(struct pt_regs *regs)
 {
 	return regs->ip;
