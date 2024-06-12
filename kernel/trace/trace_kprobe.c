@@ -635,6 +635,11 @@ static int register_trace_kprobe(struct trace_kprobe *tk)
 	struct trace_kprobe *old_tk;
 	int ret;
 
+	/* 这里的trace kprobe应该是基于kprobe的ftrace，而不是基于ftrace的kprobe。
+	 * 这里注册的是kprobe，然后只是将kprobe的信息传递给ftrace模块而已。除非
+	 * 目标地址是函数的fentry，才会启用kprobe_on_ftrace。
+	 */
+
 	guard(mutex)(&event_mutex);
 
 	old_tk = find_trace_kprobe(trace_probe_name(&tk->tp),

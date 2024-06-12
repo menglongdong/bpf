@@ -244,6 +244,10 @@ int ftrace_update_ftrace_func(ftrace_func_t func)
 	unsigned long pc;
 	u32 new;
 
+	/* arm里面进行ftrace的函数指令替换的地方，可以看出来，当超过bl的范围的
+	 * 时候，会采用brk的方式进行狗子函数的调用。
+	 */
+
 	/*
 	 * When using CALL_OPS, the function to call is associated with the
 	 * call site, and we don't have a global function pointer to update.

@@ -1035,7 +1035,9 @@ static void __init kprobe_sysctls_init(void)
 }
 #endif /* CONFIG_SYSCTL */
 
-/* Put a breakpoint for a probe. */
+/* 这里的arm不是指的arm架构，而是指的采用brk的方式来实现kprobe，这也是kprobe唯一
+ * 的实现方式。
+ */
 static void __arm_kprobe(struct kprobe *p)
 {
 	struct kprobe *_p;
@@ -1361,6 +1363,8 @@ static int register_aggr_kprobe(struct kprobe *orig_p, struct kprobe *p)
 {
 	int ret = 0;
 	struct kprobe *ap = orig_p;
+
+	/* 当一个地方有多个kprobe的时候，采用brk的方式来进行kprobe */
 
 	scoped_guard(cpus_read_lock) {
 		/* For preparing optimization, jump_label_text_reserved() is called */
@@ -1725,6 +1729,10 @@ int register_kprobe(struct kprobe *p)
 	p->nmissed = 0;
 	INIT_LIST_HEAD(&p->list);
 
+	/* 这里会检查插桩的地址是不是ftrace的fentry的地址，如果是的话，需要当前
+	 * 架构支持kprobe_on_ftrace，并且会启用kprobe_on_ftrace的功能。否则，
+	 * 这就是一个正经的kprobe。
+	 */
 	ret = check_kprobe_address_safe(p, &probed_mod);
 	if (ret)
 		return ret;
@@ -2924,6 +2932,7 @@ static const struct seq_operations kprobe_blacklist_sops = {
 };
 DEFINE_SEQ_ATTRIBUTE(kprobe_blacklist);
 
+/* 针对kprobe_event，采用brk的方式启用所有的kprobe */
 static int arm_all_kprobes(void)
 {
 	struct hlist_head *head;
