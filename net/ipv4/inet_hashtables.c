@@ -440,7 +440,9 @@ static struct sock *inet_lhash2_lookup(const struct net *net,
 		if (score > hiscore) {
 			/* 
 			 * 如果找到的sk启动了端口重用，那么以一种负载均衡的方式，从所有
-			 * 端口重用的套接口中挑一个listen的套接口。
+			 * 端口重用的套接口中挑一个listen的套接口。注意，这里不会
+			 * 查找处于EST状态的套接口。因此可以看出来，reuseport主要
+			 * 是针对listen套接口的。
 			 */
 			result = inet_lookup_reuseport(net, sk, skb, doff,
 						       saddr, sport, daddr, hnum, inet_ehashfn);
@@ -509,7 +511,7 @@ struct sock *__inet_lookup_listener(const struct net *net,
 		goto done;
 
 	/* 
-	 * 先根据目的地址+端口查找，找不到再通过INADDR_ANY+端口查找。
+	 * 根据目的地址+端口查找不到的话，再通过INADDR_ANY+端口查找。
 	 */
 	hash2 = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum);
 	ilb2 = inet_lhash2_bucket(hashinfo, hash2);
@@ -799,6 +801,10 @@ static int inet_reuseport_add_sock(struct sock *sk,
 	kuid_t uid = sk_uid(sk);
 	struct sock *sk2;
 
+	/* 端口重用（listen套接口放到一个重用组里）的条件：硬条件相同（协议、
+	 * 绑定的网口、绑定的端口）、源地址也要完全相同。这里可以看出来，
+	 * sock_reuseport里放的都是条件完全一致的套接口。
+	 */
 	sk_nulls_for_each_rcu(sk2, node, &ilb->nulls_head) {
 		if (sk2 != sk &&
 		    sk2->sk_family == sk->sk_family &&
@@ -1110,7 +1116,7 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 	 * 
 	 * 基本逻辑：从预留端口中随机挑选一个，检查是否可用。不可用的话，继续检查+2后
 	 * 的是否可用。是否可用的判断标准：
-	 * 1、这个端口必须没有被使用过，不能开启端口、地址重用，即必须得是这里分配出去
+	 * 1、这个端口必须没有被使用过，不能开启端口、地址重用，即（且）必须得是这里分配出去
 	 *    的，只有这样reuse才会是-1；
 	 * 2、检查是否与已建链套接口冲突，与上面的逻辑一致。
 	 * 

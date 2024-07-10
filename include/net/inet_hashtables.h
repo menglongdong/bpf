@@ -89,7 +89,7 @@ struct inet_bind_bucket {
 	bool			fast_ipv6_only;
 	/* 使用node将该bucket添加到hash表中 */
 	struct hlist_node	node;
-	/* owner代表所有绑定了该端口的sock，通过hash组织起来，使用了sock->sk_bind_node */
+	/* 这个哈希表里存储的是所有的和当前tb一致的tb2 */
 	struct hlist_head	bhash2;
 	struct rcu_head		rcu;
 };
@@ -175,8 +175,8 @@ struct inet_hashinfo {
 	 * or sk->sk_v6_rcv_saddr (ipv6). This 2nd bind table is used
 	 * primarily for expediting bind conflict resolution.
 	 */
-	/* 根据本地端口和地址进行哈希绑定的哈希表。这个哈希表和上面那个只能同时使用
-	 * 一个，即套接口只能存在于其中一个哈希表中。
+	/* 根据本地端口和地址进行哈希绑定的哈希表。所有的绑定了端口的套接口都会
+	 * 被放到这个bucket里，所有的bhash2都会被放到对应的bhash中。
 	 */
 	struct inet_bind_hashbucket	*bhash2;
 	unsigned int			bhash_size;
@@ -197,7 +197,9 @@ struct inet_hashinfo {
 	 * 
 	 * 这个提交认为，当多个套接口listen到同一个端口的时候，优先选择绑定了IP
 	 * 地址的套接口。由于listening哈希表是只使用端口进行哈希的，会匹配到
-	 * ANY和绑定了地址的，为了简化，这里将其删除了。
+	 * ANY和绑定了地址的，为了简化，这里将其删除了。不删除的话，有可能
+	 * ANY地址的套接口的优先级会比绑定了地址的套接口的优先级高，比如ANY同时
+	 * 绑定了网卡等。
 	 */
 
 	bool				pernet;

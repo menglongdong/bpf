@@ -340,6 +340,7 @@ static bool inet_bhash2_addr_any_conflict(const struct sock *sk, int port, int l
 	reuseport_cb_ok = !reuseport_cb || READ_ONCE(reuseport_cb->num_closed_socks);
 	rcu_read_unlock();
 
+	/* 从bhash2中找到所有的ANY的套接口 */
 	head2 = inet_bhash2_addr_any_hashbucket(sk, net, port);
 
 	spin_lock(&head2->lock);
@@ -495,6 +496,7 @@ success:
 static inline int sk_reuseport_match(struct inet_bind_bucket *tb,
 				     const struct sock *sk)
 {
+	/* 检查端口复用匹配条件：reuseport、uid 以及接收地址等均需兼容。 */
 	if (tb->fastreuseport <= 0)
 		return 0;
 	if (!sk->sk_reuseport)
@@ -510,6 +512,8 @@ static inline int sk_reuseport_match(struct inet_bind_bucket *tb,
 	 */
 	if (tb->fastreuseport == FASTREUSEPORT_ANY)
 		return 1;
+
+	/* 下面的逻辑比较少的，说的是如果这个budget上的portreuse被reset过 */
 #if IS_ENABLED(CONFIG_IPV6)
 	if (tb->fast_sk_family == AF_INET6)
 		return ipv6_rcv_saddr_equal(&tb->fast_v6_rcv_saddr,
@@ -665,7 +669,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		}
 
 		if (check_bind_conflict && inet_use_bhash2_on_bind(sk)) {
-			/* 进行完整的端口冲突检测。 */
+			/* 这个sk绑定了地址，检查这个sk和ANY是否冲突 */
 			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, true, true))
 				goto fail_unlock;
 		}
