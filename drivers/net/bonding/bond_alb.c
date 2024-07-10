@@ -24,6 +24,12 @@
 #include <net/bonding.h>
 #include <net/bond_alb.h>
 
+/* 收发包双向的负载均衡。发包的负载均衡是通过slave的哈希方式来操作的，收包的负载均衡
+ * 则是通过arp协商来实现的。在arp协商过程中，bond驱动会根据网卡的负载情况来修改
+ * arp reply报文，使得reply里的源mac指向比较空闲的slave。通过这种方式，使得后面
+ * client会将报文发送给这个空闲的slave。
+ */
+
 static const u8 mac_v6_allmcast[ETH_ALEN + 2] __long_aligned = {
 	0x33, 0x33, 0x00, 0x00, 0x00, 0x01
 };
@@ -290,6 +296,9 @@ static int rlb_arp_recv(const struct sk_buff *skb, struct bonding *bond,
 	 * address.
 	 * Clean up all hash table entries that have this address as ip_src but
 	 * have a different mac_src.
+	 */
+	/* 收到arp报文的时候，如果报文的源mac地址和存储在client中的信息不一致，
+	 * 那说明这个ip已经被新的host使用，这种情况下要删除所有的这个ip的client
 	 */
 	rlb_purge_src_ip(bond, arp);
 
@@ -566,6 +575,9 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb,
 	hash_index = _simple_hash((u8 *)&arp->ip_dst, sizeof(arp->ip_dst));
 	client_info = &(bond_info->rx_hashtbl[hash_index]);
 
+	/* 如果client已经建立过了，那么在处理arp报文的时候，就会使用当前client
+	 * 上的信息来更新arp。
+	 */
 	if (client_info->assigned) {
 		if ((client_info->ip_src == arp->ip_src) &&
 		    (client_info->ip_dst == arp->ip_dst)) {
@@ -1348,6 +1360,10 @@ static netdev_tx_t bond_do_alb_xmit(struct sk_buff *skb, struct bonding *bond,
 			bond_info->unbalanced_load += skb->len;
 	}
 
+	/* 发送之前检查当前选择的slave是不是curr_active_slave，不是的话就用
+	 * 选择的slave来填充报文的源mac地址。最后调用bond_dev_queue_xmit将
+	 * 报文发送出去。
+	 */
 	if (tx_slave && bond_slave_can_tx(tx_slave)) {
 		if (tx_slave != rcu_access_pointer(bond->curr_active_slave)) {
 			ether_addr_copy(eth_data->h_source,
@@ -1410,6 +1426,10 @@ netdev_tx_t bond_tlb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 {
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct slave *tx_slave;
+
+	/* TLB模式的发包函数，它首先根据哈希的方式从slaves中选择一个，然后调用
+	 * bond_do_alb_xmit进行报文的发送。
+	 */
 
 	tx_slave = bond_xmit_tlb_slave_get(bond, skb);
 	return bond_do_alb_xmit(skb, bond, tx_slave);
@@ -1525,6 +1545,7 @@ netdev_tx_t bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct slave *tx_slave = NULL;
 
+	/* 单纯的根据报文的目的地址来进行哈希计算，以及slave的选取。 */
 	tx_slave = bond_xmit_alb_slave_get(bond, skb);
 	return bond_do_alb_xmit(skb, bond, tx_slave);
 }
@@ -1536,6 +1557,10 @@ void bond_alb_monitor(struct work_struct *work)
 	struct alb_bond_info *bond_info = &(BOND_ALB_INFO(bond));
 	struct list_head *iter;
 	struct slave *slave;
+
+	/* 这个函数会以一定的频率频繁被调用，它主要用来做一些周期性的工作，比如
+	 * 每2s发送2个arp reply给所有的clients，从而来保证其arp不老化。
+	 */
 
 	if (!bond_has_slaves(bond)) {
 		atomic_set(&bond_info->tx_rebalance_counter, 0);

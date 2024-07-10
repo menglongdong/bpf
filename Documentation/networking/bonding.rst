@@ -484,6 +484,23 @@ downdelay
 
 fail_over_mac
 
+	fail_over的语义其实就是主备切换，这个参数决定了主备切换过程中mac地址如何
+	变动的。
+
+	是否将所有的slave的mac地址设置为不一样的，该参数默认禁用。默认情况下，所有的
+	slave和bond口的mac地址都是一样的，即active slave的mac地址。在发生主备
+	切换的时候，不会修改slave和bond的mac地址，即mac地址从始至终都不会
+	发生变化。
+
+	值为1的时候，所有的slave的mac地址都是他们自己的mac地址，而bond口的mac地址
+	是active的mac。当发送主备切换的时候，bond口也会进行mac地址的切换。这里有个
+	问题，就是如果免费arp丢失，那么就会出现网络异常。按照文档里的解释，这个参数
+	最好和miimon一起使用，这样可以延迟发送、接收免费arp，避免设备还没ready。
+
+	值为2的时候，所有的slave的mac地址不会改变，bond口的mac地址是active的mac
+	地址。当发送主备切换的时候，会将新的active的mac地址给旧的active，然后
+	将bond的mac给active。这种模式下，
+
 	Specifies whether active-backup mode should set all slaves to
 	the same MAC address at enslavement (the traditional
 	behavior), or, when enabled, perform special handling of the

@@ -64,9 +64,14 @@
 
 #define BOND_CHECK_MII_STATUS	(SIOCGMIIPHY)
 
-/* bond网口默认的模式，即采用RR的模式来进行负载均衡，轮流将报文发给各个slave */
+/* bond网口默认的模式，即采用RR的模式来进行负载均衡，轮流将报文发给各个slave。这种
+ * 模式下，默认所有的slave连同bond都使用同一个mac地址。
+ */
 #define BOND_MODE_ROUNDROBIN	0
-/* backup的模式，一个网口出现故障后自动启用其他的网口 */
+/* backup的模式，一个网口出现故障后自动启用其他的网口。这种模式下，bond网口的mac
+ * 地址是active的那个slave的。当发生active切换的时候，会发送免费arp来更新网络
+ * 中的当前bond口上的arp信息。
+ */
 #define BOND_MODE_ACTIVEBACKUP	1
 /* XOR模式的负载均衡（具有容错的能力？） */
 #define BOND_MODE_XOR		2
@@ -75,7 +80,11 @@
 #define BOND_MODE_8023AD        4
 /* 自适应发送负载均衡 */
 #define BOND_MODE_TLB           5
-/* 自适应发送和接收负载均衡 */
+/* 自适应发送和接收负载均衡。发送过程中的负载均衡是使用哈希的方式来选取发送的nic
+ * 来实现的。接收过程的负载均衡是通过拦截arp reply，并将reply中的源mac设置为
+ * 较空闲的nic的mac来实现的。可以看出来，这个模式下，每个slave上的mac地址是不一样
+ * 的。
+ */
 #define BOND_MODE_ALB		6 /* TLB + RLB (receive load balancing) */
 
 /* each slave's link has 4 states */
