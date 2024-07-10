@@ -303,6 +303,9 @@ static int sock_map_link(struct bpf_map *map, struct sock *sk)
 
 	write_lock_bh(&sk->sk_callback_lock);
 	if (stream_parser && stream_verdict && !psock->saved_data_ready) {
+		/* 指定了stream_parser和stream_verdict，需要走stream parse
+		 * 模块的逻辑。否则，只是简单的verdict。
+		 */
 		if (sk_is_tcp(sk))
 			ret = sk_psock_init_strp(sk, psock);
 		else

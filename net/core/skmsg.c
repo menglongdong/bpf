@@ -1254,6 +1254,7 @@ static int sk_psock_verdict_recv(struct sock *sk, struct sk_buff *skb)
 	if (likely(prog)) {
 		skb_dst_drop(skb);
 		skb_bpf_redirect_clear(skb);
+		/* 执行BPF期间禁止CPU迁移 */
 		ret = bpf_prog_run_pin_on_cpu(prog, skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 	}
