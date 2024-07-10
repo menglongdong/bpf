@@ -844,6 +844,15 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		rt = skb_rtable(skb);
 		addr_type = rt->rt_type;
 
+		/* 根据目标IP地址来进行路由查找，并处理查找结果。如果目标地址是
+		 * 本地IP地址，那么就响应一个ARP，然后结束。在进行arp查找的时候，
+		 * 会以override的方式来更新当前的arp缓存。
+		 *
+		 * 如果目标地址是一个单播地址，那么处理arp转发的情况。否则，尝试
+		 * 使用这个arp里的信息来进行arp缓存的更新。免费arp的话，可以进行
+		 * override。非override的情况下，只能更新arp的状态，不能更新
+		 * 里面的信息。
+		 */
 		if (addr_type == RTN_LOCAL) {
 			int dont_send;
 

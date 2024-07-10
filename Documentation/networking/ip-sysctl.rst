@@ -2081,6 +2081,7 @@ src_valid_mark - BOOLEAN
 
 	Default value is 0.
 
+.. 针对a网口收到b网口上的IP地址的arp请求的时候要做出的响应行为。
 arp_filter - BOOLEAN
 	- 1 - Allows you to have multiple network interfaces on the same
 	  subnet, and have the ARPs for each interface be answered
@@ -2100,6 +2101,7 @@ arp_filter - BOOLEAN
 	conf/{all,interface}/arp_filter is set to TRUE,
 	it will be disabled otherwise
 
+.. 在发送arp请求的时候如何选择源IP地址
 arp_announce - INTEGER
 	Define different restriction levels for announcing the local
 	source IP address from IP packets in ARP requests sent on
@@ -2132,6 +2134,7 @@ arp_announce - INTEGER
 	receiving answer from the resolved target while decreasing
 	the level announces more valid sender's information.
 
+.. 如果对待arp请求，即哪些arp请求不响应
 arp_ignore - INTEGER
 	Define different modes for sending replies in response to
 	received ARP requests that resolve local target IP addresses:
@@ -2151,6 +2154,7 @@ arp_ignore - INTEGER
 	The max value from conf/{all,interface}/arp_ignore is used
 	when ARP request is received on the {interface}
 
+.. 是否发送免费ARP
 arp_notify - BOOLEAN
 	Define mode for notification of address and device changes.
 
@@ -2160,6 +2164,7 @@ arp_notify - BOOLEAN
 	     or hardware address changes.
 	 ==  ==========================================================
 
+.. 是否接收免费ARP。这个只针对当前ARP缓存不存在的情况，存在的时候会强制刷新arp
 arp_accept - INTEGER
 	Define behavior for accepting gratuitous ARP (garp) frames from devices
 	that are not already present in the ARP table:
@@ -2276,6 +2281,7 @@ drop_unicast_in_l2_multicast - BOOLEAN
 
 	Default: 0 (disabled)
 
+.. 强制丢弃免费ARP
 drop_gratuitous_arp - BOOLEAN
 	Drop all gratuitous ARP frames, for example if there's a known
 	good ARP proxy on the network and such frames need not be used

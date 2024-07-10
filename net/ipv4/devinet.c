@@ -1576,6 +1576,7 @@ static void inetdev_send_gratuitous_arp(struct net_device *dev,
 {
 	const struct in_ifaddr *ifa;
 
+	/* 遍历当前网口上的所有的IP地址，然后发送ARP广播（免费ARP） */
 	in_dev_for_each_ifa_rtnl(ifa, in_dev) {
 		arp_send(ARPOP_REQUEST, ETH_P_ARP,
 			 ifa->ifa_local, dev,
