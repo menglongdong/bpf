@@ -2395,6 +2395,7 @@ __latent_entropy struct task_struct *copy_process(
 	 * cgroup specific, it unconditionally needs to place the task on a
 	 * runqueue.
 	 */
+	/* 这里会将任务放到当前CPU的运行队列上 */
 	retval = sched_cgroup_fork(p, args);
 	if (retval)
 		goto bad_fork_cancel_cgroup;
