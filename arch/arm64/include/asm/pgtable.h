@@ -605,6 +605,9 @@ static inline int pmd_protnone(pmd_t pmd)
 				pte_pmd(pte_swp_clear_uffd_wp(pmd_pte(pmd)))
 #endif /* CONFIG_HAVE_ARCH_USERFAULTFD_WP */
 
+/* 检查一个pmd是否可写。这里检查的方式和检查pte是完全一致的，除了进行了类型转换，
+ * 即将pmd类型转为pte类型。
+ */
 #define pmd_write(pmd)		pte_write(pmd_pte(pmd))
 
 static inline pmd_t pmd_mkhuge(pmd_t pmd)

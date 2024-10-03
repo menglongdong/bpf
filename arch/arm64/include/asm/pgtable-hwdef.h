@@ -134,16 +134,27 @@
  * Level 2 descriptor (PMD).
  */
 #define PMD_TYPE_MASK		(_AT(pmdval_t, 3) << 0)
+/* 代表当前是一个有效的指向下一级的PMD */
 #define PMD_TYPE_TABLE		(_AT(pmdval_t, 3) << 0)
+/* 这个标志位代表当前的PMD是否是有效的 */
 #define PMD_TYPE_SECT		(_AT(pmdval_t, 1) << 0)
 #define PMD_TABLE_AF		(_AT(pmdval_t, 1) << 10)	/* Ignored if no FEAT_HAFT */
+
+/* 这个标记为用于设置当前的PMD是一个普通的页表项，还是一个末端项（巨页等）。当
+ * 存在这个标志的时候，PMD上面的一些标志位是会被忽略的，比如读写、dirty等标志位，
+ * PMD_TYPE_TABLE_BIT
+ */
 
 /*
  * Section
  */
+/* 这两个是PMD的访问权限控制。 */
 #define PMD_SECT_USER		(_AT(pmdval_t, 1) << 6)		/* AP[1] */
 #define PMD_SECT_RDONLY		(_AT(pmdval_t, 1) << 7)		/* AP[2] */
 #define PMD_SECT_S		(_AT(pmdval_t, 3) << 8)
+/* 这个标志位代表着当前的PMD的access flag，即最近是否被访问过。如果为0的话，会
+ * 导致访问的时候产生异常。
+ */
 #define PMD_SECT_AF		(_AT(pmdval_t, 1) << 10)
 #define PMD_SECT_NG		(_AT(pmdval_t, 1) << 11)
 #define PMD_SECT_CONT		(_AT(pmdval_t, 1) << 52)
