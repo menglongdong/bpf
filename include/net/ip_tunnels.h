@@ -87,6 +87,9 @@ struct ip_tunnel_encap {
 };
 
 /* Flags for ip_tunnel_info mode. */
+/* 代表IP隧道中已经存储了用于发包的时候所需的外层报文的信息。比如通过BPF来设置
+ * 外层报文信息，就会设置这个标志。
+ */
 #define IP_TUNNEL_INFO_TX	0x01	/* represents tx tunnel parameters */
 #define IP_TUNNEL_INFO_IPV6	0x02	/* key contains IPv6 addresses */
 #define IP_TUNNEL_INFO_BRIDGE	0x04	/* represents a bridged tunnel id */

@@ -105,6 +105,7 @@ struct inet_connection_sock {
 				  icsk_ca_initialized:1,
 				  icsk_ca_setsockopt:1,
 				  icsk_ca_dst_locked:1;
+	/* 当前重传的报文重传的次数 */
 	__u8			  icsk_retransmits;
 	/* 当前套接口上处于pending状态的定时器的掩码 */
 	__u8			  icsk_pending;

@@ -2260,6 +2260,12 @@ static void tcp_minshall_update(struct tcp_sock *tp, unsigned int mss_now,
 static bool tcp_nagle_check(bool partial, const struct tcp_sock *tp,
 			    int nonagle)
 {
+	/* 函数返回true的话代表不能发送数据，被nagle算法抑制。如果用户主动设置了
+	 * TCP_CORK，那么必须要等到报文完整。
+	 * 如果设置了TCP_NAGLE_OFF或者TCP_NAGLE_PUSH，那么立马进行数据的发送，
+	 * 不使用nagle。
+	 * 否则，采用nagle算法。这个要求有在外数据，因为是ACK驱动的。
+	 */
 	return partial &&
 		((nonagle & TCP_NAGLE_CORK) ||
 		 (!nonagle && tp->packets_out && tcp_minshall_check(tp)));
@@ -3291,7 +3297,7 @@ void tcp_send_loss_probe(struct sock *sk)
 	int mss = tcp_current_mss(sk);
 
 	/* TLP定时器超时的处理函数。如果发送队列（不是重传队列）中有数据，且在窗口范围
-	 * 内，那么就发送一个新的数据。否则，重传rtx队列中的第一个数据，并将
+	 * 内，那么就发送一个新的数据。否则，重传rtx队列中的最后一个数据，并将
 	 * tlp_retrans设置为1。同时，将tp->snd_nxt保存到tp->tlp_high_seq。
 	 * 
 	 * 在发送完成后，会重置rtx定时器。可以看出来，TLP只会触发一次。同时，在rto定时器

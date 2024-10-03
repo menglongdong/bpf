@@ -6064,6 +6064,7 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 		return;
 	}
 	tcp_cleanup_skb(skb);
+	/* 可以看出来，放入到队列的时候，报文的data都已经指向了payload */
 	__skb_pull(skb, tcp_hdr(skb)->doff * 4);
 
 	reason = SKB_DROP_REASON_NOT_SPECIFIED;

@@ -293,6 +293,7 @@ struct vxlan_dev {
 #endif
 	struct net_device *dev;
 	struct net	  *net;		/* netns for packet i/o */
+	/* 默认的remote，即创建vxlan的时候的信息创建的remote，包括vni、remote等 */
 	struct vxlan_rdst default_dst;	/* default destination */
 
 	struct timer_list age_timer;

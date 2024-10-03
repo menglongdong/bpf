@@ -541,6 +541,7 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 		goto drop;
 	}
 
+	/* 在IP层，准备好L4层的头部数据位置 */
 	iph = ip_hdr(skb);
 	skb->transport_header = skb->network_header + iph->ihl*4;
 

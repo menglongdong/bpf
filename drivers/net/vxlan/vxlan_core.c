@@ -864,6 +864,8 @@ int vxlan_fdb_create(struct vxlan_dev *vxlan,
 	struct vxlan_fdb *f;
 	int rc;
 
+	/* 创建一个fdb。可以看出来，一个fdb，要么有个nh，要么至少有一个remote */
+
 	if (vxlan->cfg.addrmax &&
 	    vxlan->addrcnt >= vxlan->cfg.addrmax)
 		return -ENOSPC;
@@ -1082,6 +1084,9 @@ static int vxlan_fdb_update_create(struct vxlan_dev *vxlan,
 		return -EOPNOTSUPP;
 
 	netdev_dbg(vxlan->dev, "add %pM -> %pIS\n", mac, ip);
+	/* 创建网卡的时候，如果指定了remote参数，那么会创建一个对应的
+	 * fdb，且其中有一个remote。
+	 */
 	rc = vxlan_fdb_create(vxlan, mac, ip, state, port, src_vni,
 			      vni, ifindex, fdb_flags, nhid, &f, extack);
 	if (rc < 0)
@@ -1438,6 +1443,10 @@ static enum skb_drop_reason vxlan_snoop(struct net_device *dev,
 		ifindex = src_ifindex;
 #endif
 
+	/* 根据当前的mac来查找对应的fdb。如果找到了的话，就用当前报文上的信息更新
+	 * fdb上的第一个remote，包括remote的IP地址。如果没有找到的话，就创建一个
+	 * 新的fdb。
+	 */
 	f = vxlan_find_mac_rcu(vxlan, src_mac, vni);
 	if (likely(f)) {
 		struct vxlan_rdst *rdst = first_remote_rcu(f);
@@ -1454,7 +1463,9 @@ static enum skb_drop_reason vxlan_snoop(struct net_device *dev,
 			   rdst->remote_ifindex == ifindex))
 			return SKB_NOT_DROPPED_YET;
 
-		/* Don't migrate static entries, drop packets */
+		/* 当前的mac配置了静态的转发表，且mac地址和报文的不一样。这种情况下，
+		 * 进行丢包操作。
+		 */
 		if (f->state & (NUD_PERMANENT | NUD_NOARP))
 			return SKB_DROP_REASON_VXLAN_ENTRY_EXISTS;
 
@@ -2515,6 +2526,7 @@ void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		if (!ifindex)
 			ifindex = sock4->sock->sk->sk_bound_dev_if;
 
+		/* 根据remote、端口等一系列的信息，进行outer报文的路由查找 */
 		rt = udp_tunnel_dst_lookup(skb, dev, vxlan->net, ifindex,
 					   &saddr, pkey, src_port, dst_port,
 					   tos, use_cache ? dst_cache : NULL);
@@ -2783,9 +2795,14 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * 封包；否则，则采用ip_tunnel_info中的信息来封包。
 	 * 
 	 * 创建vxlan的时候，如果指定了external这个选项，那么好像会设置这个metadata
-	 * 标志。
+	 * 标志。可以参考下面的这个例子：
+	 * 
+	 * ip link add vxlan4 type vxlan dstport 4789 dev eth1 ttl 4 external
+	 * ip link set dev vxlan4 up
+	 * ip route replace 220.0.0.0/24 dev vxlan4 encap ip id 100 dst 192.168.2.221
 	 */
 	if (vxlan->cfg.flags & VXLAN_F_COLLECT_METADATA) {
+		/* 网桥相关。vxlan接入了一个网桥？ */
 		if (info && info->mode & IP_TUNNEL_INFO_BRIDGE &&
 		    info->mode & IP_TUNNEL_INFO_TX) {
 			vni = tunnel_id_to_key32(info->key.tun_id);
@@ -2841,6 +2858,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	rcu_read_lock();
 	/* 根据当前报文的mac地址来查找当前vxlan设备上的转发表 */
 	f = vxlan_find_mac_tx(vxlan, eth->h_dest, vni);
+	/* 路由短路的东西 */
 	did_rsc = false;
 
 	if (f && (f->flags & NTF_ROUTER) && (vxlan->cfg.flags & VXLAN_F_RSC) &&
@@ -2851,6 +2869,9 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 			f = vxlan_find_mac_tx(vxlan, eth->h_dest, vni);
 	}
 
+	/* 先根据mac地址进行fdb的精确查找，找不到的话再根据all_zeros_mac来查找
+	 * 全局的fdb实例。在配置remote的时候，就会插入一条这种实例。
+	 */
 	if (f == NULL) {
 		f = vxlan_find_mac_tx(vxlan, all_zeros_mac, vni);
 		if (f == NULL) {
@@ -2867,7 +2888,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	/* 如果转发项配置了nh，就根据nh来进行转发；否则，取当前vxlan上所有的remotes
-	 * 来进行转发。
+	 * 来进行转发。可以看出来，能够配置多个remote。
 	 */
 	if (rcu_access_pointer(f->nh)) {
 		vxlan_xmit_nh(skb, dev, f,

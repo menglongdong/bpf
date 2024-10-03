@@ -984,6 +984,10 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	struct sock *ctl_sk;
 	u64 transmit_time;
 
+	/* non-full套接口状态下用来发送ACK报文的函数。这里会使用当前CPU上的一个
+	 * ctrl tcp套接口来进行网络报文的发送。
+	 */
+
 	memset(&rep.th, 0, sizeof(struct tcphdr));
 	memset(&arg, 0, sizeof(arg));
 
@@ -1058,6 +1062,9 @@ static void tcp_v4_send_ack(const struct sock *sk,
 			   inet_twsk(sk)->tw_mark : READ_ONCE(sk->sk_mark);
 	ctl_sk->sk_priority = (sk->sk_state == TCP_TIME_WAIT) ?
 			   inet_twsk(sk)->tw_priority : READ_ONCE(sk->sk_priority);
+	/* 这个是计算出来是要发送报文的时间，基于tx_delay，是当前时间之后的。在__ip_make_skb
+	 * 的时候，这个ts会被设置到skb的时间戳上。
+	 */
 	transmit_time = tcp_transmit_time(sk);
 	ip_send_unicast_reply(ctl_sk, sk,
 			      skb, &TCP_SKB_CB(skb)->header.h4.opt,

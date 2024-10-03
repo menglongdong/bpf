@@ -769,7 +769,8 @@ void tcp_push(struct sock *sk, int flags, int mss_now,
 	tcp_mark_urg(tp, flags);
 
 	/* 检查是否启用自动并包。这里可以看出来，autocork利用的是TSQ的机制，即skb被
-	 * 孤立的时候的回调函数。
+	 * 孤立的时候的回调函数。同时，autocork是nagle更上层的东西，其延迟的逻辑
+	 * 和nagle不同。
 	 */
 	if (tcp_should_autocork(sk, skb, size_goal)) {
 
@@ -1706,6 +1707,9 @@ void tcp_cleanup_rbuf(struct sock *sk, int copied)
 	__tcp_cleanup_rbuf(sk, copied);
 }
 
+/* TCP受到的数据报文释放的函数。这里会把报文放到分配这个skb的那个CPU的链表上，在
+ * 收包软中断中统一进行报文的释放。
+ */
 static void tcp_eat_recv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	__skb_unlink(skb, &sk->sk_receive_queue);

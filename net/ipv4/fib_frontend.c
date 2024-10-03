@@ -394,7 +394,9 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	 */
 	if (fib_lookup(net, &fl4, &res, 0))
 		goto last_resort;
-	/* 源地址是本机地址，且那个网口上没有开启local_accept选项 */
+	/* 源地址是单播，或者源地址是本地多播且本地网卡开启了accept_local，那么是
+	 * OK的。
+	 */
 	if (res.type != RTN_UNICAST) {
 		if (res.type != RTN_LOCAL) {
 			reason = SKB_DROP_REASON_IP_INVALID_SOURCE;
@@ -466,7 +468,7 @@ int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 		if (net->ipv4.fib_has_custom_local_routes ||
 		    fib4_has_custom_rules(net))
 			goto full_check;
-		/* 源地址是本地地址的话，就违法？ */
+		/* 源地址是本地地址的话，且没有开启accept_local，那么就非法 */
 		if (inet_lookup_ifaddr_rcu(net, src))
 			return -SKB_DROP_REASON_IP_LOCAL_SOURCE;
 

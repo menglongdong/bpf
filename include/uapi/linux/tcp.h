@@ -92,8 +92,14 @@ enum {
 #define TCP_MSS_DESIRED		1220U	/* IPv6 (tunneled), EDNS0 (RFC3226) */
 
 /* TCP socket options */
+/* 关闭延迟数据发送算法。这里的延迟发送指的是nagle算法，即采用ACK驱动数据发送的
+ * 算法。会设置TCP_NAGLE_OFF标志。
+ */
 #define TCP_NODELAY		1	/* Turn off Nagle's algorithm. */
 #define TCP_MAXSEG		2	/* Limit MSS */
+/* 关闭获取启用数据CORK。会取消或者设置TCP_NAGLE_CORK标志。这个标志可以覆盖
+ * TCP_NAGLE_OFF标准值。
+ */
 #define TCP_CORK		3	/* Never send partially complete segments */
 #define TCP_KEEPIDLE		4	/* Start keeplives after this period */
 #define TCP_KEEPINTVL		5	/* Interval between keepalives */
