@@ -2111,14 +2111,19 @@ retry:
 	sb->s_writers.frozen = SB_FREEZE_WRITE;
 	/* Release s_umount to preserve sb_start_write -> s_umount ordering */
 	super_unlock_excl(sb);
+	/* 等待所有的写完成。这里，在涉及到写操作的系统调用阶段，比如truncate等，
+	 * 都会先拿这个读写锁。
+	 */
 	sb_wait_write(sb, SB_FREEZE_WRITE);
+	/* 对超级块进行加锁，加锁后将不能进行卸载操作。 */
 	__super_lock_excl(sb);
 
 	/* Now we go and block page faults... */
 	sb->s_writers.frozen = SB_FREEZE_PAGEFAULT;
+	/* 等待所有的pagefalut完成。拿到这个锁后，将不能触发pagefault。 */
 	sb_wait_write(sb, SB_FREEZE_PAGEFAULT);
 
-	/* All writers are done so after syncing there won't be dirty data */
+	/* 同步所有的脏页到磁盘中，确保数据的一致性。 */
 	ret = sync_filesystem(sb);
 	if (ret) {
 		sb->s_writers.frozen = SB_UNFROZEN;
