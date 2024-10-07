@@ -5561,6 +5561,7 @@ static void tcp_sack_new_ofo_skb(struct sock *sk, u32 seq, u32 end_seq)
 	if (!cur_sacks)
 		goto new_sack;
 
+	/* 收到乱序的数据报文，将其加入到OFO队列后，更新sack相关的信息。 */
 	for (this_sack = 0; this_sack < cur_sacks; this_sack++, sp++) {
 		/* 如果乱序的数据刚好和某个sack块连着，那么就将其加入到那个块，
 		 * 并将其移动到第一个块。
@@ -5577,6 +5578,10 @@ static void tcp_sack_new_ofo_skb(struct sock *sk, u32 seq, u32 end_seq)
 		}
 	}
 
+	/* 如果sack块中的数量达到了2个，那么尝试发送压缩ack。这是不是意味着，如果
+	 * 乱序比较严重，那么每次收到乱序数据，都会触发ack的发送？看样子这个是为了
+	 * 防止sack信息的丢失。
+	 */
 	if (this_sack >= TCP_SACK_BLOCKS_EXPECTED)
 		tcp_sack_compress_send_ack(sk);
 
@@ -6641,6 +6646,9 @@ send_now:
 		tp->dup_ack_counter++;
 		goto send_now;
 	}
+	/* 压缩定时器已经on了的话，就不再重新触发。这里了可以看出来，压缩ack和
+	 * 延迟ack定时器是分开的，两个可能同时on的。
+	 */
 	tp->compressed_ack++;
 	if (hrtimer_is_queued(&tp->compressed_ack_timer))
 		return;

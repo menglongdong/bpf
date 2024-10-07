@@ -423,7 +423,7 @@ bool inet_addr_is_any(struct sockaddr_storage *addr)
 }
 EXPORT_SYMBOL(inet_addr_is_any);
 
-__attribute__((optimize("O0"))) void inet_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
+void inet_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
 			      __be32 from, __be32 to, bool pseudohdr)
 {
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {

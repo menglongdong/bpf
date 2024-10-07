@@ -326,7 +326,16 @@ struct tcp_sock {
 		prev_ecnfield:2; /* ECN bits from the previous segment */
 	__be32	pred_flags;
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
-	/* 最近一次收到或者发送报文的时间戳，约等于当前时间，它的单位是us */
+	/* 最近一次收到或者发送报文的时间戳，约等于当前时间，它的单位是us。在以下情况
+	 * 下，它会被刷新：
+	 * - 套接口刚创建（完成三次握手，tcp_init_transfer函数中）
+	 * - 关闭TCP_REPAIR的时候，发送窗口探测
+	 * - 发送延迟ACK报文（**压缩ack没有刷新*）
+	 * - 写定时器超时、保活定时器超时
+	 * - 发送rst的时候
+	 * - 收到或者发送携带数据的报文之前。
+	 * 可以看出来，在任何报文发送之前，都会刷新这个mstamp，包括ack报文。
+	 */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	/* 下一个要接收的数据 */
 	u32	rcv_nxt;	/* What we want to receive next		*/

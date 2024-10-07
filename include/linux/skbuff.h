@@ -742,7 +742,9 @@ typedef unsigned char *sk_buff_data_t;
 #endif
 
 enum skb_tstamp_type {
+	/* 代表当前skb上的时间戳是收包方向的时间戳 */
 	SKB_CLOCK_REALTIME,
+	/* 代表当前skb上的时间戳是发包方向的时间戳 */
 	SKB_CLOCK_MONOTONIC,
 	SKB_CLOCK_TAI,
 	__SKB_CLOCK_MAX = SKB_CLOCK_TAI,

@@ -316,10 +316,16 @@ void tcp_delack_timer_handler(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 在__tcp_transmit_skb函数中，如果发送的报文携带ack，那么会取消这里的
+	 * 定时器。
+	 */
+
 	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))
 		return;
 
-	/* Handling the sack compression case */
+	/* 压缩ack定时器超时后，如果socket被用户拿锁，那么其发送ack的逻辑会在socket
+	 * 被释放的时候，调用这个tcp_delack_timer_handler函数中处理。
+	 */
 	if (tp->compressed_ack) {
 		tcp_mstamp_refresh(tp);
 		tcp_sack_compress_send_ack(sk);
