@@ -70,8 +70,11 @@ struct scm_timestamping64 {
  * is zero, then this is a hardware timestamp and recorded in ts[2].
  */
 enum {
+	/* 报文到达驱动层的时间戳，上报给用户 */
 	SCM_TSTAMP_SND,		/* driver passed skb to NIC, or HW */
+	/* 报文到达sched层的时间戳，上报给用户 */
 	SCM_TSTAMP_SCHED,	/* data entered the packet scheduler */
+	/* 重传队列中的报文被ack的时候的时间戳，上报给用户 */
 	SCM_TSTAMP_ACK,		/* data acknowledged by peer */
 	SCM_TSTAMP_COMPLETION,	/* packet tx completion */
 };

@@ -2404,6 +2404,9 @@ ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	}
 
 make_route:
+	/* 貌似这里是需要被转发的情况。这里会进行路由缓存的创建，其创建的路由
+	 * 缓存的dst_input是ip_forward().
+	 */
 	reason = ip_mkroute_input(skb, res, in_dev, daddr, saddr, dscp,
 				  flkeys);
 

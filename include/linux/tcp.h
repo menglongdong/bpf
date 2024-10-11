@@ -533,7 +533,9 @@ struct tcp_sock {
 	/* TCP拥塞控制的恢复点 */
 	u32	high_seq;	/* snd_nxt at onset of congestion	*/
 
-	/* 最后一个重传的报文的发送时间，可用于基于TS的伪超时检测。 */
+	/* 最后一个重传的报文的发送时间，可用于基于TS的伪超时检测。当重传的报文
+	 * 都被ack后，这个时间戳就会被清空。
+	 */
 	u32	retrans_stamp;	/* Timestamp of the last retransmit,
 				 * also used in SYN-SENT to remember stamp of
 				 * the first SYN. */

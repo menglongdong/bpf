@@ -5716,10 +5716,6 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 	bool tsonly, opt_stats = false;
 	u32 tsflags;
 
-	/* 这个函数用于将已经被确认的报文的时间戳信息放回给用户态程序。tsonly代表只
-	 * 返回ts信息，不携带原始数据。
-	 */
-
 	if (!sk)
 		return;
 
@@ -5766,6 +5762,9 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 		skb_shinfo(skb)->tskey = skb_shinfo(orig_skb)->tskey;
 	}
 
+	/* 更新skb上的时间戳，将其更新为当前的时间，类型为收包方向。然后将其放入到
+	 * 套接口的错误队列中。
+	 */
 	if (hwtstamps)
 		*skb_hwtstamps(skb) = *hwtstamps;
 	else

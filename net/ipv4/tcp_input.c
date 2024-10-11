@@ -3837,6 +3837,10 @@ static void tcp_ack_tstamp(struct sock *sk, struct sk_buff *skb,
 	if (likely(!TCP_SKB_CB(skb)->txstamp_ack))
 		return;
 
+	/* 这个函数用于将已经被确认的报文的时间戳信息放回给用户态程序。tsonly代表只
+	 * 返回ts信息，不携带原始数据。
+	 */
+
 	shinfo = skb_shinfo(skb);
 	if (!before(shinfo->tskey, prior_snd_una) &&
 	    before(shinfo->tskey, tcp_sk(sk)->snd_una)) {

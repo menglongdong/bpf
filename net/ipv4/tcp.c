@@ -1305,6 +1305,10 @@ new_segment:
 
 			if (unlikely(process_backlog >= 16)) {
 				process_backlog = 0;
+				/* 一旦处理过backlog队列，那么收报队列中的数据
+				 * 就会发生改变，此时会尝试重新计算mss等信息，
+				 * 再走一遍。
+				 */
 				if (sk_flush_backlog(sk))
 					goto restart;
 			}

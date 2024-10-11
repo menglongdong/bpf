@@ -617,6 +617,12 @@ struct skb_shared_info {
 		struct xsk_tx_metadata_compl xsk_meta;
 	};
 	unsigned int	gso_type;
+	/* 时间戳的key，即取的报文数据中的最后一个字节的序列号作为key值，然后将
+	 * 时间戳信息和这个key值上报给用户态。
+	 *
+	 * 在sendmsg拷贝数据完成后，如果当前套接口通过SO_TIMESTAMPING_NEW设置了
+	 * 对应的时间戳标志位，那么会初始化这里和TCP_SKB_CB(skb)->txstamp_ack。
+	 */
 	u32		tskey;
 
 	/*

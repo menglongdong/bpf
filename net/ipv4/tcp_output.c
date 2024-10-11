@@ -1469,6 +1469,9 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 		 * this is a minor annoyance.
 		 */
 		if (rate != ~0UL && rate && tp->data_segs_out >= 10) {
+			/* 根据当前的预估的发包速率，来计算发送当前的报文需要的
+			 * 时间（ns），再减去网络抖动的时间。
+			 */
 			u64 len_ns = div64_ul((u64)skb->len * NSEC_PER_SEC, rate);
 			u64 credit = tp->tcp_wstamp_ns - prior_wstamp;
 
