@@ -1841,6 +1841,7 @@ __mkroute_input(struct sk_buff *skb, const struct fib_result *res,
 		return reason;
 	}
 
+	/* 参数中的res是正向查找的结果，这里需要再进行反向路由验证。 */
 	err = fib_validate_source(skb, saddr, daddr, dscp, FIB_RES_OIF(*res),
 				  in_dev->dev, in_dev, &itag);
 	if (err < 0) {
@@ -1852,6 +1853,10 @@ __mkroute_input(struct sk_buff *skb, const struct fib_result *res,
 	}
 
 	do_cache = res->fi && !itag;
+	/* 这里是处理fib_validate_source返回值为1的场景，即forward的路由的scape
+	 * 是HOST。这种情况下，后面在forward的时候会响应一个redirect的icmp给
+	 * 发送方。
+	 */
 	if (out_dev == in_dev && err && IN_DEV_TX_REDIRECTS(out_dev) &&
 	    skb->protocol == htons(ETH_P_IP)) {
 		__be32 gw;

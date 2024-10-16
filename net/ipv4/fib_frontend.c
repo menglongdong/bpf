@@ -408,13 +408,16 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	}
 	fib_combine_itag(itag, &res);
 
-	/* 判断当前路由的下一条设备和dev是否匹配。 */
+	/* 判断当前路由的下一条设备和dev是否匹配，即进来的网口和反向查找的出向网口
+	 * 是同一个网口。
+	 */
 	dev_match = fib_info_nh_uses_dev(res.fi, dev);
 	/* 按照英文注释，这里应该不会匹配，因为loop设备会存留dst，不会走到这里 */
 	dev_match = dev_match || (res.type == RTN_LOCAL &&
 				  dev == net->loopback_dev);
 	/* 设备匹配的话，就不需要后面的处理了。 */
 	if (dev_match) {
+		/* 这里代表设备匹配，但是路由的作用域是HOST（较小） */
 		ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_HOST;
 		return ret;
 	}
@@ -430,6 +433,7 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 
 	ret = 0;
 	if (fib_lookup(net, &fl4, &res, FIB_LOOKUP_IGNORE_LINKSTATE) == 0) {
+		/* 这里做同样的作用域的检查 */
 		if (res.type == RTN_UNICAST)
 			ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_HOST;
 	}
