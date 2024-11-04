@@ -16446,8 +16446,13 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	u8 opcode = BPF_OP(insn->code);
 	int err;
 
+	/* 处理所有的的ALU相关的指令，包括合法性的检查、bound的跟踪等 */
+
 	if (opcode == BPF_END || opcode == BPF_NEG) {
 		if (opcode == BPF_NEG) {
+			/* 对于取负数操作，指令中的源操作数需要为常量且为0，立即数
+			 * 和offset等字段需要都为0。
+			 */
 			if (BPF_SRC(insn->code) != BPF_K ||
 			    insn->src_reg != BPF_REG_0 ||
 			    insn->off != 0 || insn->imm != 0) {
@@ -21452,7 +21457,8 @@ static int do_check(struct bpf_verifier_env *env)
 		int err, marks_err;
 
 		/* 进行所有的指令的遍历处理。这里会先根据指令的index取出对应的指令，
-		 * 检查处理过的指令的数量有没有达到上限。
+		 * 检查处理过的指令的数量有没有达到上限。这里的上限是为了防止死循环
+		 * 兜底的，在前面会通过状态机制来检查是否存在可能的死循环。
 		 */
 
 		/* reset current history entry on each new instruction */
@@ -21476,12 +21482,12 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		state->last_insn_idx = env->prev_insn_idx;
-	state->insn_idx = env->insn_idx;
-	/* 修剪点由 CFG 阶段标注，用于快速判定状态是否可复用。 */
-	if (is_prune_point(env, env->insn_idx)) {
-		err = is_state_visited(env, env->insn_idx);
-		if (err < 0)
-			return err;
+		state->insn_idx = env->insn_idx;
+		/* 修剪点由 CFG 阶段标注，用于快速判定状态是否可复用。 */
+		if (is_prune_point(env, env->insn_idx)) {
+			err = is_state_visited(env, env->insn_idx);
+			if (err < 0)
+				return err;
 			if (err == 1) {
 				/* found equivalent state, can prune the search */
 				if (env->log.level & BPF_LOG_LEVEL) {
@@ -21497,12 +21503,16 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
+		/* 如果当前指令是一个branch指令，那么就将其入栈。这个是在cfg检查的
+		 * 时候设置的。这里的branch一定是条件跳转，且条件不可推断。
+		 */
 		if (is_jmp_point(env, env->insn_idx)) {
 			err = push_jmp_history(env, state, 0, 0);
 			if (err)
 				return err;
 		}
 
+		/* 检查当前是否有信号需要处理，已经是否需要进行调度 */
 		if (signal_pending(current))
 			return -EAGAIN;
 
@@ -21530,6 +21540,9 @@ static int do_check(struct bpf_verifier_env *env)
 			env->prev_log_pos = env->log.end_pos;
 		}
 
+		/* 当前的BPF程序如果是要offload到硬件设备（如网卡），那么就调用
+		 * netdev上的钩子函数来进行验证。
+		 */
 		if (bpf_prog_is_offloaded(env->prog->aux)) {
 			err = bpf_prog_offload_verify_insn(env, env->insn_idx,
 							   env->prev_insn_idx);
@@ -21537,14 +21550,12 @@ static int do_check(struct bpf_verifier_env *env)
 				return err;
 		}
 
-		sanitize_mark_insn_seen(env);
-		prev_insn_idx = env->insn_idx;
+			sanitize_mark_insn_seen(env);
+			prev_insn_idx = env->insn_idx;
 
-		/* Reduce verification complexity by stopping speculative path
-		 * verification when a nospec is encountered.
-		 */
-		if (state->speculative && insn_aux->nospec)
-			goto process_bpf_exit;
+			/* 遇到 nospec 边界时，提前结束当前 speculative 路径。 */
+			if (state->speculative && insn_aux->nospec)
+				goto process_bpf_exit;
 
 		err = bpf_reset_stack_write_marks(env, env->insn_idx);
 		if (err)
@@ -24819,6 +24830,9 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->last_insn_idx = -1;
 
 	regs = state->frame[state->curframe]->regs;
+	/* 这里可以看出来，TYPE_EXT可以当做subprog来对待，因为它本身就是用来代替
+	 * subprog的。
+	 */
 	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
 		const char *sub_name = subprog_name(env, subprog);
 		struct bpf_subprog_arg_info *arg;
@@ -24830,6 +24844,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 		if (ret)
 			goto out;
 
+		/* 对于异常回调函数，检查其参数是否合法，即参数个数和参数类型 */
 		if (subprog_is_exc_cb(env, subprog)) {
 			state->frame[0]->in_exception_callback_fn = true;
 
@@ -26419,7 +26434,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
-	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。 */
+	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。先对主
+	 * prog进行检查，然后对subprog进行检查。
+	 */
 	ret = do_check_main(env);
 	ret = ret ?: do_check_subprogs(env);
 

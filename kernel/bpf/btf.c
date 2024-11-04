@@ -7831,6 +7831,10 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	u32 i, nargs, btf_id;
 	const char *tname;
 
+	/* 进行subprog函数的解析，包括解析函数所有的参数以及返回值信息，函数参数
+	 * 中的tag信息等，并将其保存到检查器的subprog中。
+	 */
+
 	if (sub->args_cached)
 		return 0;
 

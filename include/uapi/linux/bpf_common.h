@@ -37,7 +37,7 @@
 #define		BPF_AND		0x50
 #define		BPF_LSH		0x60
 #define		BPF_RSH		0x70
-#define		BPF_NEG		0x80
+#define		BPF_NEG		0x80 /* 取负数操作 */
 #define		BPF_MOD		0x90
 #define		BPF_XOR		0xa0
 

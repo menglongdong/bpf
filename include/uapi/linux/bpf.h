@@ -28,7 +28,7 @@
 #define BPF_ARSH	0xc0	/* sign extending arithmetic shift right */
 
 /* change endianness of a register */
-#define BPF_END		0xd0	/* flags for endianness conversion: */
+#define BPF_END		0xd0	/* 大小端操作，下面的几个都是相关的指令 */
 #define BPF_TO_LE	0x00	/* convert to little-endian */
 #define BPF_TO_BE	0x08	/* convert to big-endian */
 #define BPF_FROM_LE	BPF_TO_LE

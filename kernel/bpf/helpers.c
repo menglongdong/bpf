@@ -3141,6 +3141,9 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	return false;
 }
 
+/* BPF中进行异常抛出的BPF kfunc。这个函数会终止当前BPF程序的执行，并弹出BPF的栈
+ * 到调用者处。抛出的异常号会作为异常处理函数的输入。
+ */
 __bpf_kfunc void bpf_throw(u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
