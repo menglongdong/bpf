@@ -724,6 +724,8 @@ static netdev_tx_t erspan_xmit(struct sk_buff *skb,
 	bool truncate = false;
 	__be16 proto;
 
+	/* erspan设备的发包函数。这是一种基于GRE+IPv4的SPAN技术。 */
+
 	if (!pskb_inet_may_pull(skb))
 		goto free_skb;
 

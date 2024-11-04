@@ -58,6 +58,10 @@ static inline void nft_trace_packet(const struct nft_pktinfo *pkt,
 				    const struct nft_rule_dp *rule,
 				    enum nft_trace_types type)
 {
+	/* 进行trace事件的上报。报文每经过一个规则的处理，都会触发这个事件。链的
+	 * 默认处理也会触发这个事件。这里会通过netlink的方式，上送到对应的监听
+	 * 套接口中来进行处理。
+	 */
 	if (static_branch_unlikely(&nft_trace_enabled)) {
 		info->nf_trace = pkt->skb->nf_trace;
 		__nft_trace_packet(pkt, verdict, rule, info, type);

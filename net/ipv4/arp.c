@@ -766,9 +766,7 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	    arp->ar_op != htons(ARPOP_REQUEST))
 		goto out_free_skb;
 
-/*
- *	Extract fields
- */
+	/* 解析ARP报文 */
 	arp_ptr = (unsigned char *)(arp + 1);
 	sha	= arp_ptr;
 	arp_ptr += dev->addr_len;
@@ -784,19 +782,13 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		arp_ptr += dev->addr_len;
 	}
 	memcpy(&tip, arp_ptr, 4);
-/*
- *	Check for bad requests for 127.x.x.x and requests for multicast
- *	addresses.  If this is one such, delete it.
- */
+
+	/* 检查arp的目标IP是local net或者是广播的非法情况 */
 	if (ipv4_is_multicast(tip) ||
 	    (!IN_DEV_ROUTE_LOCALNET(in_dev) && ipv4_is_loopback(tip)))
 		goto out_free_skb;
 
- /*
-  *	For some 802.11 wireless deployments (and possibly other networks),
-  *	there will be an ARP proxy and gratuitous ARP frames are attacks
-  *	and thus should not be accepted.
-  */
+	/* 检查是不是免费ARP，以及当前网口上支不支持免费ARP */
 	if (sip == tip && IN_DEV_ORCONF(in_dev, DROP_GRATUITOUS_ARP))
 		goto out_free_skb;
 
@@ -823,6 +815,7 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
  *  cache.
  */
 
+	/* 处理IP隧道的情况 */
 	if (arp->ar_op == htons(ARPOP_REQUEST) && skb_metadata_dst(skb))
 		reply_dst = (struct dst_entry *)
 			    iptunnel_metadata_reply(skb_metadata_dst(skb),
@@ -847,6 +840,9 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		/* 根据目标IP地址来进行路由查找，并处理查找结果。如果目标地址是
 		 * 本地IP地址，那么就响应一个ARP，然后结束。在进行arp查找的时候，
 		 * 会以override的方式来更新当前的arp缓存。
+		 *
+		 * 可以看出来，这里进行路由查找的逻辑是和普通的IP路由查找的逻辑是
+		 * 完全一样的。
 		 *
 		 * 如果目标地址是一个单播地址，那么处理arp转发的情况。否则，尝试
 		 * 使用这个arp里的信息来进行arp缓存的更新。免费arp的话，可以进行

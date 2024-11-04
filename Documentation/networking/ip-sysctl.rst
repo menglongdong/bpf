@@ -663,6 +663,7 @@ tcp_min_rtt_wlen - INTEGER
 
 	Default: 300
 
+.. TCP收包缓冲区自动调节，即根据网络传输情况，自动扩大TCP收包缓冲区的大小，默认开启
 tcp_moderate_rcvbuf - BOOLEAN
 	If enabled, TCP performs receive buffer auto-tuning, attempting to
 	automatically size the buffer (no greater than tcp_rmem[2]) to
@@ -2081,7 +2082,8 @@ src_valid_mark - BOOLEAN
 
 	Default value is 0.
 
-.. 针对a网口收到b网口上的IP地址的arp请求的时候要做出的响应行为。
+.. 针对a网口收到b网口上的IP地址的arp请求的时候要做出的响应行为。启用后，如果
+.. 入向的网口和出向（回包）的网口不是一个网口，就会不响应。
 arp_filter - BOOLEAN
 	- 1 - Allows you to have multiple network interfaces on the same
 	  subnet, and have the ARPs for each interface be answered
@@ -2134,7 +2136,7 @@ arp_announce - INTEGER
 	receiving answer from the resolved target while decreasing
 	the level announces more valid sender's information.
 
-.. 如果对待arp请求，即哪些arp请求不响应
+.. 如何对待arp请求，即哪些arp请求不响应
 arp_ignore - INTEGER
 	Define different modes for sending replies in response to
 	received ARP requests that resolve local target IP addresses:

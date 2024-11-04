@@ -87,6 +87,15 @@ static inline int netlink_is_kernel(struct sock *sk)
 	return nlk_test_bit(KERNEL_SOCKET, sk);
 }
 
+/* 这是一个全局的表，里面存储了所有的PF_NETLINK支持的协议（也就是创建套接口的时候
+ * 指定的最后那个参数），每个相关的协议注册进来的。创建的PF_NETLINK的套接口上的
+ * 钩子函数会被设置到对应的套接口上。所有的处于listen状态的套接口都会被放到这个协议
+ * 对应的netlink_table->listeners链表里。
+ *
+ * 从整体上看，sk->ops会被统一设置为netlink_ops。
+ *
+ * 这个数组在模块初始化的时候就会被分配，长度为MAX_LINKS。
+ */
 struct netlink_table *nl_table __read_mostly;
 EXPORT_SYMBOL_GPL(nl_table);
 
@@ -1340,6 +1349,9 @@ retry:
 		kfree_skb(skb);
 		return PTR_ERR(sk);
 	}
+	/* 这里说明是要和内核进行通信，这里会直接调用套接口上的recv函数进行处理，
+	 * 而不需要进行消息的queue。
+	 */
 	if (netlink_is_kernel(sk))
 		return netlink_unicast_kernel(sk, skb, ssk);
 
@@ -1834,6 +1846,7 @@ static int netlink_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 		return err;
 
 	if (msg->msg_namelen) {
+		/* 指定了目标portid或者group的情况 */
 		err = -EINVAL;
 		if (msg->msg_namelen < sizeof(struct sockaddr_nl))
 			goto out;
@@ -1847,12 +1860,12 @@ static int netlink_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 			goto out;
 		netlink_skb_flags |= NETLINK_SKB_DST;
 	} else {
-		/* Paired with WRITE_ONCE() in netlink_connect() */
+		/* 没有指定，针对netlink_connect的场景 */
 		dst_portid = READ_ONCE(nlk->dst_portid);
 		dst_group = READ_ONCE(nlk->dst_group);
 	}
 
-	/* Paired with WRITE_ONCE() in netlink_insert() */
+	/* 如果当前的套接口还没进行过bind操作，那么这里会进行随机的portid bind */
 	if (!READ_ONCE(nlk->bound)) {
 		err = netlink_autobind(sock);
 		if (err)
@@ -2006,6 +2019,10 @@ __netlink_kernel_create(struct net *net, int unit, struct module *module,
 	struct netlink_sock *nlk;
 	struct listeners *listeners = NULL;
 	unsigned int groups;
+
+	/* 这个函数不仅是创建一个内核范围内的netlink套接口，更是为当前的协议（unit）
+	 * 进行了注册。
+	 */
 
 	BUG_ON(!nl_table);
 
@@ -2529,6 +2546,9 @@ int netlink_rcv_skb(struct sk_buff *skb, int (*cb)(struct sk_buff *,
 	struct nlmsghdr *nlh;
 	int err;
 
+	/* 这里的是总体的内核套接口收包函数，这里会解析对应的msg，并将解析好的传递
+	 * 给特定协议的钩子函数。
+	 */
 	while (skb->len >= nlmsg_total_size(0)) {
 		int msglen;
 
@@ -2552,6 +2572,9 @@ int netlink_rcv_skb(struct sk_buff *skb, int (*cb)(struct sk_buff *,
 			goto skip;
 
 ack:
+		/* 这里的ack从逻辑上指的是把处理的结果通过ack报文的形式返回给用户
+		 * 套接口。
+		 */
 		if (nlh->nlmsg_flags & NLM_F_ACK || err)
 			netlink_ack(skb, nlh, err, &extack);
 
@@ -2819,6 +2842,7 @@ static const struct proto_ops netlink_ops = {
 	.mmap =		sock_no_mmap,
 };
 
+/* netlink协议族对应的钩子函数 */
 static const struct net_proto_family netlink_family_ops = {
 	.family = PF_NETLINK,
 	.create = netlink_create,

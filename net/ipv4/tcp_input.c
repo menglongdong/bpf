@@ -775,6 +775,7 @@ static void tcp_init_buffer_space(struct sock *sk)
 
 	tp->rcv_ssthresh = min(tp->rcv_ssthresh, tp->window_clamp);
 	tp->snd_cwnd_stamp = tcp_jiffies32;
+	/* 完成TCP三次握手后，会设置这里的空间。 */
 	tp->rcvq_space.space = min3(tp->rcv_ssthresh, tp->rcv_wnd,
 				    (u32)TCP_INIT_CWND * tp->advmss);
 }
@@ -936,6 +937,7 @@ void tcp_rcvbuf_grow(struct sock *sk, u32 newval)
 	oldval = tp->rcvq_space.space;
 	tp->rcvq_space.space = newval;
 
+	/* 开始进行收包队列的训练（默认都会进行的） */
 	if (!READ_ONCE(net->ipv4.sysctl_tcp_moderate_rcvbuf) ||
 	    (sk->sk_userlocks & SOCK_RCVBUF_LOCK))
 		return;
@@ -962,6 +964,7 @@ void tcp_rcvbuf_grow(struct sock *sk, u32 newval)
 
 	cap = READ_ONCE(net->ipv4.sysctl_tcp_rmem[2]);
 
+	/* 将数据量转为对用的buffer空间量，要乘以对应的系数 */
 	rcvbuf = min_t(u32, tcp_space_from_win(sk, rcvwin), cap);
 	if (rcvbuf > sk->sk_rcvbuf) {
 		WRITE_ONCE(sk->sk_rcvbuf, rcvbuf);
@@ -978,6 +981,18 @@ void tcp_rcv_space_adjust(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	int time, inq, copied;
+
+	/* 每一次用户将报文从收包队列中取走后，需要调用这个函数来调整收包缓冲区
+	 * 大小。
+	 *
+	 * 如果两次read的间隔太短，或者rtt还没有衡量出来，就不处理。这里认为每次
+	 * 拷贝的数据量，都是上一个rtt内对端发送的数据量。在慢启动和拥塞避免
+	 * 阶段，rtt内收到的报文是逐渐递增的。如果这个rtt内收到的报文比上个rtt
+	 * 多，那么就进行收包缓冲区的自动适配。
+	 *
+	 * 针对丢包的场景，我们需要考虑2倍的空间容量；考虑到慢启动阶段，我们需要
+	 * 4倍的容量。
+	 */
 
 	trace_tcp_rcv_space_adjust(sk);
 
@@ -7219,6 +7234,7 @@ discard:
 }
 EXPORT_IPV6_MOD(tcp_rcv_established);
 
+/* 这个函数会在连接完成之后（三次握手或者fastopen）。数据传输之前被调用 */
 void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -7247,6 +7263,7 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	tcp_init_buffer_space(sk);
 }
 
+/* 主动建链完成后，会调用这个函数。 */
 void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -7388,7 +7405,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 	 * 4、处理同时打开的情况，即如果报文是一个纯SYN报文，那么当前是同时打开。
 	 */
 
-	/* 进行fastopen的TCP选项的解析。 */
+	/* 进行fastopen的TCP选项的解析。这里会根据报文里的MSS信息来更新mss_clamp */
 	tcp_parse_options(sock_net(sk), skb, &tp->rx_opt, 0, &foc);
 	if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr)
 		tp->rx_opt.rcv_tsecr -= tp->tsoffset;
@@ -7816,6 +7833,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		if (tp->rx_opt.tstamp_ok)
 			tp->advmss -= TCPOLEN_TSTAMP_ALIGNED;
 
+		/* 被动建链完成，fastopen或者是正常的三次握手，都会走这里的路径 */
 		if (req) {
 			tcp_rcv_synrecv_state_fastopen(sk);
 		} else {

@@ -21,6 +21,9 @@
 
 /* Types of messages */
 
+/* 通过sendmsg的方式来和内核netlink ROUTE模块进行通信的消息类型，可以理解为ROUTE
+ * 支持的操作。
+ */
 enum {
 	RTM_BASE	= 16,
 #define RTM_BASE	RTM_BASE
@@ -260,7 +263,9 @@ struct rtmsg {
 
 enum {
 	RTN_UNSPEC,
+	/* 不属于本地地址的单播IP地址，可能是网关或者需要转发的报文 */
 	RTN_UNICAST,		/* Gateway or direct route	*/
+	/* 目的地址是本机的地址 */
 	RTN_LOCAL,		/* Accept locally		*/
 	RTN_BROADCAST,		/* Accept locally as broadcast,
 				   send as broadcast */

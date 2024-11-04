@@ -354,6 +354,7 @@ static void rtnl_nets_unlock(struct rtnl_nets *rtnl_nets)
 	rtnl_unlock();
 }
 
+/* 用来处理ROUTE的二维数组，按照[family][type]的方式组织的。 */
 static struct rtnl_link __rcu *__rcu *rtnl_msg_handlers[RTNL_FAMILY_MAX + 1];
 
 static inline int rtm_msgindex(int msgtype)

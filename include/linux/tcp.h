@@ -108,6 +108,7 @@ struct tcp_sack_block {
 #define TCP_SACK_SEEN     (1 << 0)   /*1 = peer is SACK capable, */
 #define TCP_DSACK_SEEN    (1 << 2)   /*1 = DSACK was received from peer*/
 
+/* 这里存放的是一些TCP选项，很多是一开始协商出来的，比如是否支持TS、窗口缩放因子等 */
 struct tcp_options_received {
 /*	PAWS/RTTM data	*/
 	int	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
@@ -128,7 +129,9 @@ struct tcp_options_received {
 	u8	num_sacks;	/* Number of SACK blocks		*/
 	/* 用户通过ioctl主动设定的MSS */
 	u16	user_mss;	/* mss requested by user in ioctl	*/
-	/* TCP三次握手期间协商出来的MSS */
+	/* TCP三次握手期间协商出来的MSS。对于组件建链，初始值为TCP_MSS_DEFAULT；
+	 * 对于被动建链，初始值为af_ops->mss_clamp，也是TCP_MSS_DEFAULT。
+	 */
 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
 };
 
@@ -226,7 +229,9 @@ struct tcp_sock {
 	u32	tsoffset;	/* timestamp offset */
 	/* 发送窗口大小（SYN协商出来的那个）。 */
 	u32	snd_wnd;	/* The window we expect to receive	*/
-	/* 当前生效的MSS，不会超过 mss_clamp 的大小 */
+	/* 当前生效的MSS，不会超过 mss_clamp 的大小。初始默认值为TCP_MSS_DEFAULT，
+	 * 即536。
+	 */
 	u32	mss_cache;	/* Cached effective mss, not including SACKS */
 	u32	snd_cwnd;	/* Sending congestion window		*/
 	/* 拥塞状态下，所有发送出去的数据，包括重传的数据。 */
@@ -258,6 +263,10 @@ struct tcp_sock {
 	u32	rttvar_us;	/* smoothed mdev_max			*/
 	/* 已经发送出去，还没被确认的重传数据 */
 	u32	retrans_out;	/* Retransmitted packets out		*/
+	/* 建议的MSS值。如果是主动建链，那么这里会取路由上的建议MSS，也就是对应的
+	 * 网卡的建议MSS。用户可以主动通过option来设置这个值。这个值只会在连接
+	 * 初始阶段被设置，后面就不会再被修改了。
+	 */
 	u16	advmss;		/* Advertised MSS			*/
 	u16	urg_data;	/* Saved octet of OOB data and control flags */
 	u32	lost;		/* Total data packets lost incl. rexmits */
@@ -345,6 +354,16 @@ struct tcp_sock {
 	u32	snd_nxt;	/* Next sequence we send		*/
 	/* 当前发送窗口的第一个字节，也可以理解为重传队列中的第一个数据。*/
 	u32	snd_una;	/* First byte we want an ack for	*/
+	/* 窗口的上限。在主动建链的时候，会在建链之前初始化这个，先取路由
+	 * RTAX_WINDOW上的信息。如果是被动建链，会先取listener上面的，如果没有
+	 * 设置，再取路由上面的。这个值是可以通过TCP OPTION来修改的。
+	 *
+	 * 三次握手完成后，这个值如果大于buffer可容纳的数据大小，就将其设置为该
+	 * 数据大小。
+	 *
+	 * 后续，每次进行收包缓冲区大小自适应的时候，都会将这个值设置为当前buffer
+	 * 大小对应的窗口。
+	 */
 	u32	window_clamp;	/* Maximal window to advertise		*/
 	/* 平滑版本的rtt，不至于导致单次rtt的波动引发rtt的大幅波动，按照
 	 * rtt = 7/8 rtt + 1/8 new 计算出来的。
@@ -421,8 +440,16 @@ struct tcp_sock {
 	} rcv_rtt_est;
 /* Receiver queue space */
 	struct {
+		/* 三次握手刚完成的时候，这里会被设置为：
+		 * min3(tp->rcv_ssthresh, tp->rcv_wnd,
+		 * 		    (u32)TCP_INIT_CWND * tp->advmss)
+		 *
+		 * 后面，每次收包后，会将其更新为上一次收包的长度
+		 */
 		int	space;
+		/* 已经被用户拷贝走的数据的最后一个序列号，即上一次收包的序列号 */
 		u32	seq;
+		/* 上一次收包的时间 */
 		u64	time;
 	} rcvq_space;
 	__cacheline_group_end(tcp_sock_write_rx);

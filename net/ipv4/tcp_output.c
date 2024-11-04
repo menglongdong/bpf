@@ -151,6 +151,8 @@ static __u16 tcp_advertise_mss(struct sock *sk)
 	const struct dst_entry *dst = __sk_dst_get(sk);
 	int mss = tp->advmss;
 
+	/* 发送SYN报文的时候，要携带的MSS。这里会尝试使用dst上的mss来取代advmss */
+
 	if (dst) {
 		unsigned int metric = dst_metric_advmss(dst);
 
@@ -306,7 +308,11 @@ static u16 tcp_select_window(struct sock *sk)
 	}
 
 	cur_win = tcp_receive_window(tp);
-	/* 根据内存等信息所计算出来的窗口大小 */
+	/* 根据内存等信息所计算出来的窗口大小，每次发送报文之前都要调用这个函数
+	 * 来计算当前发送端的窗口大小。
+	 *
+	 * new_win是内存窗口，cur_win是逻辑窗口。
+	 */
 	new_win = __tcp_select_window(sk);
 	if (new_win < cur_win) {
 		/* Danger Will Robinson!
@@ -315,6 +321,9 @@ static u16 tcp_select_window(struct sock *sk)
 		 * window in time.  --DaveM
 		 *
 		 * Relax Will Robinson.
+		 */
+		/* 如果不支持窗口缩减，或者没有开启窗口缩放因子，那么窗口大小至少
+		 * 为当前的逻辑窗口。
 		 */
 		if (!READ_ONCE(net->ipv4.sysctl_tcp_shrink_window) || !tp->rx_opt.rcv_wscale) {
 			/* Never shrink the offered window */
@@ -2054,6 +2063,10 @@ void tcp_mtup_init(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct net *net = sock_net(sk);
 
+	/* 进行PMTU的初始化。这里是在三次握手完成后被调用的，里面的mss_clamp已经
+	 * 被正确地设置过了。
+	 */
+
 	icsk->icsk_mtup.enabled = READ_ONCE(net->ipv4.sysctl_tcp_mtu_probing) > 1;
 	icsk->icsk_mtup.search_high = tp->rx_opt.mss_clamp + sizeof(struct tcphdr) +
 			       icsk->icsk_af_ops->net_header_len;
@@ -2093,6 +2106,13 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 
 	/* search_high/search_low是TCP侧的PMTU功能，它会在这个范围内设置MSS，用来
 	 * 探测最大可用的MTU。
+	 *
+	 * 在套接口三次握手之前，也会调用这个函数，使用dst上的mtu信息来更新这里的
+	 * mss。这里在计算mss的时候，考虑了mss_clamp和TCP头部长度。这个时候，
+	 * mss_clamp是默认值。
+	 *
+	 * 三次握手完成后，也会调用这个函数，用dst上的信息来更新这里的mss。这个时候，
+	 * mss_clamp已经被更新了，可以用来更新当前的mss_cache了。
 	 */
 	if (icsk->icsk_mtup.search_high > pmtu)
 		icsk->icsk_mtup.search_high = pmtu;
@@ -2134,6 +2154,11 @@ unsigned int tcp_current_mss(struct sock *sk)
 	unsigned int header_len;
 	struct tcp_out_options opts;
 	struct tcp_key key;
+
+	/* 这里会先检查PMTU或者ICMP有没有成功的更新，有的话就更新到mss_cache。
+	 * 然后，这里会检查TCP OPTION需要的头部长度和标准长度的差值，然后进行适配，
+	 * 计算出来一个MSS并返回。
+	 */
 
 	mss_now = tp->mss_cache;
 
@@ -3525,6 +3550,7 @@ u32 __tcp_select_window(struct sock *sk)
 	/* Don't do rounding if we are using window scaling, since the
 	 * scaled window will not line up with the MSS boundary anyway.
 	 */
+	/* 根据窗口缩放因子，计算出来真正的窗口大小。 */
 	if (tp->rx_opt.rcv_wscale) {
 		window = free_space;
 
@@ -4300,6 +4326,8 @@ static void tcp_connect_init(struct sock *sk)
 	__u8 rcv_wscale;
 	u16 user_mss;
 	u32 rcv_wnd;
+
+	/* 主动建链的时候，在进行三次握手之前调用的函数，用来初始化当前的套接口信息。 */
 
 	/* We'll fix this up when we get a response from the other end.
 	 * See tcp_input.c:tcp_rcv_state_process case TCP_SYN_SENT.

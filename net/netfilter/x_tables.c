@@ -1739,6 +1739,10 @@ xt_hook_ops_alloc(const struct xt_table *table, nf_hookfn *fn)
 	uint8_t hooknum;
 	struct nf_hook_ops *ops;
 
+	/* 一个xt相当于一张表，里面覆盖了这个表所要生效的NF_HOOK，形成其链，其中
+	 * fn为每个NF_HOOK的钩子函数。
+	 */
+
 	if (!num_hooks)
 		return ERR_PTR(-EINVAL);
 

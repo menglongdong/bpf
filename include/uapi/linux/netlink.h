@@ -6,6 +6,9 @@
 #include <linux/socket.h> /* for __kernel_sa_family_t */
 #include <linux/types.h>
 
+/* 这里定义的都是PF_NETLINK所支持的protocol，也是他们在nl_table中的索引 */
+
+/* 路由和NIC相关的，对应的bind函数为 rtnetlink_bind */
 #define NETLINK_ROUTE		0	/* Routing/device hook				*/
 #define NETLINK_UNUSED		1	/* Unused number				*/
 #define NETLINK_USERSOCK	2	/* Reserved for user mode socket protocols 	*/
@@ -37,7 +40,9 @@
 struct sockaddr_nl {
 	__kernel_sa_family_t	nl_family;	/* AF_NETLINK	*/
 	unsigned short	nl_pad;		/* zero		*/
+	/* 发送单播的情况 */
 	__u32		nl_pid;		/* port ID	*/
+	/* 发送多播的情况 */
        	__u32		nl_groups;	/* multicast groups mask */
 };
 
