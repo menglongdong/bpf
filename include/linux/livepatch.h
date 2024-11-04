@@ -94,6 +94,7 @@ struct klp_func {
 struct klp_object {
 	/* external */
 	const char *name;
+	/* 一个obj上可以设置多个内核函数 */
 	struct klp_func *funcs;
 	struct klp_callbacks callbacks;
 
@@ -135,6 +136,7 @@ struct klp_state {
 struct klp_patch {
 	/* external */
 	struct module *mod;
+	/* 这里的一个obj应该是对应一个目标模块，或者vmlinux */
 	struct klp_object *objs;
 	struct klp_state *states;
 	bool replace;

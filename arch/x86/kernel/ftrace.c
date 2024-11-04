@@ -255,6 +255,7 @@ void ftrace_replace_code(int enable)
 
 		case FTRACE_UPDATE_MAKE_CALL:
 		case FTRACE_UPDATE_MODIFY_CALL:
+			/* 生成对应的跳转指令 */
 			new = ftrace_call_replace(rec->ip, ftrace_get_addr_new(rec));
 			break;
 
@@ -266,6 +267,7 @@ void ftrace_replace_code(int enable)
 		smp_text_poke_batch_add((void *)rec->ip, new, MCOUNT_INSN_SIZE, NULL);
 		ftrace_update_record(rec, enable);
 	}
+	/* 修改对应的代码 */
 	smp_text_poke_batch_finish();
 }
 
@@ -336,6 +338,10 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	union ftrace_op_code_union op_ptr;
 	int ret;
 
+	/* 先根据是否支持regs来判断使用的caller汇编函数，然后分配一段内存，并
+	 * 将这个函数的所有数据拷贝到分配的内存中，并在最后添加一条ret指令。
+	 */
+
 	if (ops->flags & FTRACE_OPS_FL_SAVE_REGS) {
 		start_offset = (unsigned long)ftrace_regs_caller;
 		end_offset = (unsigned long)ftrace_regs_caller_end;
@@ -394,6 +400,9 @@ create_trampoline(struct ftrace_ops *ops, unsigned int *tramp_size)
 	 * the global function_trace_op variable.
 	 */
 
+	/* 把当前函数的ftrace ops存储到了trampoline的末尾？这和bpf trampoline
+	 * 的将所有的参数都保存到栈里有些差异哦。
+	 */
 	ptr = (unsigned long *)(trampoline + size + RET_SIZE);
 	*ptr = (unsigned long)ops;
 

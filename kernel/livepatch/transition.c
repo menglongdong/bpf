@@ -285,9 +285,13 @@ static int klp_check_and_switch_task(struct task_struct *task, void *arg)
 {
 	int ret;
 
+	/* task进程在其CPU上运行，但是不是当前进程，就不能switch。说明klp的
+	 * switch需要task处于非运行的状态。
+	 */
 	if (task_curr(task) && task != current)
 		return -EBUSY;
 
+	/* 离谱。。。检查目标函数是否在这个task进程的栈上来判断的？ */
 	ret = klp_check_stack(task, arg);
 	if (ret)
 		return ret;
@@ -322,6 +326,9 @@ static bool klp_try_switch_task(struct task_struct *task)
 	 * Now try to check the stack for any to-be-patched or to-be-unpatched
 	 * functions.  If all goes well, switch the task to the target patch
 	 * state.
+	 */
+	/* 下面的函数会保证klp_check_and_switch_task函数在被调用的时候，其状态（运行）
+	 * 是不会发生改变的。
 	 */
 	if (task == current)
 		ret = klp_check_and_switch_task(current, &old_name);
@@ -471,6 +478,9 @@ void klp_try_complete_transition(void)
 	}
 	cpus_read_unlock();
 
+	/* 存在没有完成切换的进程，那么就调用一个延迟队列来做后续的处理。延迟的
+	 * 时长为一个HZ。
+	 */
 	if (!complete) {
 		if (klp_signals_cnt && !(klp_signals_cnt % SIGNALS_TIMEOUT))
 			klp_send_signals();
@@ -577,6 +587,7 @@ void klp_init_transition(struct klp_patch *patch, int state)
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, task) {
 		WARN_ON_ONCE(task->patch_state != KLP_TRANSITION_IDLE);
+		/* 正常情况下，这里应该是0 */
 		task->patch_state = initial_state;
 	}
 	read_unlock(&tasklist_lock);

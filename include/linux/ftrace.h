@@ -354,6 +354,7 @@ enum {
 	FTRACE_OPS_FL_REMOVING			= BIT(9),
 	FTRACE_OPS_FL_MODIFYING			= BIT(10),
 	FTRACE_OPS_FL_ALLOC_TRAMP		= BIT(11),
+	/* 这个说明当前的ftrace会修改返回值，可能是origin call，或者klp */
 	FTRACE_OPS_FL_IPMODIFY			= BIT(12),
 	FTRACE_OPS_FL_PID			= BIT(13),
 	FTRACE_OPS_FL_RCU			= BIT(14),

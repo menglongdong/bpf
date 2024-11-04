@@ -94,7 +94,10 @@ struct ftrace_ops ftrace_list_end __read_mostly = {
 int ftrace_enabled __read_mostly;
 static int __maybe_unused last_ftrace_enabled;
 
-/* Current function tracing op */
+/* 常规情况下，这个变量会被存储到trampoline的末尾，并作为第三个参数传递给callback
+ * 可以看出来，默认情况下的ops是链表ops，默认的callback也是链表callback
+ * ftrace_ops_list_func.
+ */
 struct ftrace_ops *function_trace_op __read_mostly = &ftrace_list_end;
 /* What to set function_trace_op to */
 static struct ftrace_ops *set_function_trace_op;
@@ -362,8 +365,10 @@ int __register_ftrace_function(struct ftrace_ops *ops)
 	if (ftrace_pids_enabled(ops))
 		ops->func = ftrace_pid_func;
 
+	/* 为当前的ops生成对应的trampoline */
 	ftrace_update_trampoline(ops);
 
+	/* 更新一些全局的函数 */
 	if (ftrace_enabled)
 		update_ftrace_function();
 
@@ -2960,6 +2965,7 @@ void ftrace_modify_all_code(int command)
 	}
 
 	if (command & FTRACE_UPDATE_CALLS)
+		/* 正常情况下，是会走这个路径的 */
 		ftrace_replace_code(mod_flags | FTRACE_MODIFY_ENABLE_FL);
 	else if (command & FTRACE_DISABLE_CALLS)
 		ftrace_replace_code(mod_flags);
@@ -3017,6 +3023,7 @@ void __weak arch_ftrace_update_code(int command)
 
 static void ftrace_run_update_code(int command)
 {
+	/* 获取text_mutex全局锁，避免和klp或者内核模块产生冲突。 */
 	ftrace_arch_code_modify_prepare();
 
 	/*
@@ -3119,6 +3126,7 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 {
 	int ret;
 
+	/* 这里的ftrace_disabled只有在ftrace系统异常的时候，才会置位 */
 	if (unlikely(ftrace_disabled))
 		return -ENODEV;
 
@@ -3149,9 +3157,13 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 		return ret;
 	}
 
+	/* 利用当前的ops来更新对应的目标函数的record。如果ops的filter为空，那么
+	 * 针对的目标就是所有的内核函数。
+	 */
 	if (ftrace_hash_rec_enable(ops))
 		command |= FTRACE_UPDATE_CALLS;
 
+	/* 遍历所有的record，根据其状态进行刷新。 */
 	ftrace_startup_enable(command);
 
 	/*
@@ -8423,6 +8435,9 @@ static void ftrace_update_trampoline(struct ftrace_ops *ops)
 {
 	unsigned long trampoline = ops->trampoline;
 
+	/* 看样子，ftrace框架本身也有自己的trampoline机制。对于x86架构，这里会
+	 * 分配新的trampoline，并按照这个ops进行trampoline的更新。
+	 */
 	arch_ftrace_update_trampoline(ops);
 	if (ops->trampoline && ops->trampoline != trampoline &&
 	    (ops->flags & FTRACE_OPS_FL_ALLOC_TRAMP)) {

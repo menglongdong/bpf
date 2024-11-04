@@ -1050,6 +1050,9 @@ static int __klp_enable_patch(struct klp_patch *patch)
 
 	pr_notice("enabling patch '%s'\n", patch->mod->name);
 
+	/* 各种初始化，包括将进程的patch_state设置为0，将klp funcs的transition
+	 * 设置为1
+	 */
 	klp_init_transition(patch, KLP_TRANSITION_PATCHED);
 
 	/*
@@ -1062,9 +1065,11 @@ static int __klp_enable_patch(struct klp_patch *patch)
 	smp_wmb();
 
 	klp_for_each_object(patch, obj) {
+		/* 检查obj对应的目标（内核模块或者vmlinux）是否加载。 */
 		if (!klp_is_object_loaded(obj))
 			continue;
 
+		/* 调用在启用热补丁之前的钩子函数 */
 		ret = klp_pre_patch_callback(obj);
 		if (ret) {
 			pr_warn("pre-patch callback failed for object '%s'\n",
@@ -1072,6 +1077,7 @@ static int __klp_enable_patch(struct klp_patch *patch)
 			goto err;
 		}
 
+		/* 开始进行热补丁的函数替换（打补丁） */
 		ret = klp_patch_object(obj);
 		if (ret) {
 			pr_warn("failed to patch object '%s'\n",
@@ -1113,6 +1119,7 @@ int klp_enable_patch(struct klp_patch *patch)
 	if (!patch || !patch->mod || !patch->objs)
 		return -EINVAL;
 
+	/* 遍历klp上所有的obj，obj上的目标函数不能为空 */
 	klp_for_each_object_static(patch, obj) {
 		if (!obj->funcs)
 			return -EINVAL;
@@ -1149,6 +1156,7 @@ int klp_enable_patch(struct klp_patch *patch)
 
 	klp_init_patch_early(patch);
 
+	/* 主要是进行kobj的初始化，加入到对应的目录里面 */
 	ret = klp_init_patch(patch);
 	if (ret)
 		goto err;

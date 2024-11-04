@@ -162,6 +162,10 @@ static int klp_patch_func(struct klp_func *func)
 	struct klp_ops *ops;
 	int ret;
 
+	/* 根据函数名来找到对应的目标函数的ops。如果找到了，说明已经为这个函数
+	 * 使用过klp了，可以直接利用。没有找到的话，就创建一个。
+	 */
+
 	if (WARN_ON(!func->old_func))
 		return -EINVAL;
 
@@ -172,6 +176,7 @@ static int klp_patch_func(struct klp_func *func)
 	if (!ops) {
 		unsigned long ftrace_loc;
 
+		/* 根据函数地址来找到对应的mrecord */
 		ftrace_loc = ftrace_location((unsigned long)func->old_func);
 		if (!ftrace_loc) {
 			pr_err("failed to find location for function '%s'\n",
@@ -203,6 +208,7 @@ static int klp_patch_func(struct klp_func *func)
 			goto err;
 		}
 
+		/* 利用ftrace的机制，进行ftrace的注册 */
 		ret = register_ftrace_function(&ops->fops);
 		if (ret) {
 			pr_err("failed to register ftrace handler for function '%s' (%d)\n",
