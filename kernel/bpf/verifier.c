@@ -3952,6 +3952,7 @@ static bool insn_has_def32(struct bpf_insn *insn)
 	return !is_reg64(insn, dst_reg, NULL, DST_OP);
 }
 
+/* 将寄存器标记为0扩展 */
 static void mark_insn_zext(struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg)
 {
@@ -3977,8 +3978,14 @@ static int __check_reg_arg(struct bpf_verifier_env *env, struct bpf_reg_state *r
 		return -EINVAL;
 	}
 
+	/* 将这个寄存器标记为被刻过，即标记其在当前栈帧中被访问（读或者写）过 */
 	mark_reg_scratched(env, regno);
 
+	/* 检查寄存器是否可以作为源操作数，或者目的操作数。对于源操作数，其首先
+	 * 必须是已经初始化过的，不然不可读。
+	 *
+	 * 如果作为写寄存器，那么会将其mark为unknow。
+	 */
 	reg = &regs[regno];
 	rw64 = is_reg64(insn, regno, reg, t);
 	if (t == SRC_OP) {
@@ -5940,6 +5947,7 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 	 * index'es we need to make sure that whatever we use
 	 * will have a set floor within our range.
 	 */
+	/* 对map内容的读写操作的偏移量不能为负数 */
 	if (reg->smin_value < 0 &&
 	    (reg->smin_value == S64_MIN ||
 	     (off + reg->smin_value != (s64)(s32)(off + reg->smin_value)) ||
@@ -5948,6 +5956,17 @@ static int check_mem_region_access(struct bpf_verifier_env *env, u32 regno,
 			regno);
 		return -EACCES;
 	}
+	/* 这里的size指的是指令中要读取的数据的长度，mem_size指的是目标数据的长度，
+	 * 比如map_key或者map_value的长度。
+	 *
+	 * 这里首先检查bound reg的左边界访问有没有超过目标内存，然后再检查右
+	 * 边界。这里的检查逻辑还是比较简单的，这里要考虑reg的bound，如果reg
+	 * 本身的偏移是个const，那这里就更加简单了。这里的bound看样子是按照
+	 * 有符号64位来判断min的，但是又按照无符号来判断max的，搞不懂了哦。
+	 *
+	 * 可以看出来，这里的访问偏移，实际上只允许正的，不允许负的。而且，这里
+	 * 还有个上限值BPF_MAX_VAR_OFF，即最大的内存访问不会超过这个偏移。
+	 */
 	err = __check_mem_access(env, regno, reg->smin_value + off, size,
 				 mem_size, zero_size_allowed);
 	if (err) {
@@ -6022,6 +6041,11 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	int perm_flags;
 	const char *reg_name = "";
 
+	/* 将kptr存储到map的时候，检查寄存器中的数据和map中的field是否匹配。
+	 * 如果btf_type来自内核，那么可以存储内核指针；否则，只能存储通过
+	 * bpf_obj_new这种方式分配出来的用户态指针。
+	 */
+
 	if (btf_is_kernel(reg->btf)) {
 		perm_flags = PTR_MAYBE_NULL | PTR_TRUSTED | MEM_RCU;
 
@@ -6034,6 +6058,7 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 			perm_flags |= MEM_PERCPU;
 	}
 
+	/* 检查寄存器中的内容的合法性，即和目标是否匹配 */
 	if (base_type(reg->type) != PTR_TO_BTF_ID || (type_flag(reg->type) & ~perm_flags))
 		goto bad_type;
 
@@ -6230,17 +6255,19 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 		/* We can simply mark the value_regno receiving the pointer
 		 * value from map as PTR_TO_BTF_ID, with the correct type.
 		 */
-		ret = mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID,
-				      kptr_field->kptr.btf, kptr_field->kptr.btf_id,
-				      btf_ld_kptr_type(env, kptr_field));
-		if (ret < 0)
-			return ret;
-	} else if (class == BPF_STX) {
+			ret = mark_btf_ld_reg(env, cur_regs(env), value_regno, PTR_TO_BTF_ID,
+					      kptr_field->kptr.btf, kptr_field->kptr.btf_id,
+					      btf_ld_kptr_type(env, kptr_field));
+			if (ret < 0)
+				return ret;
+		} else if (class == BPF_STX) {
+		/* kptr写入到map的情况，检查寄存器的状态和对应的field是否匹配 */
 		val_reg = reg_state(env, value_regno);
 		if (!register_is_null(val_reg) &&
 		    map_kptr_match_type(env, kptr_field, val_reg, value_regno))
 			return -EACCES;
 	} else if (class == BPF_ST) {
+		/* 这种情况下，应该是将对应的指针设置为NULL的意思。 */
 		if (insn->imm) {
 			verbose(env, "BPF_ST imm must be 0 when storing to kptr at off=%u\n",
 				kptr_field->offset);
@@ -6285,6 +6312,10 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 	if (IS_ERR_OR_NULL(map->record))
 		return 0;
 	rec = map->record;
+	/* 这个record里记录来当前的map中的value中的一些特殊的属性，比如具有timer
+	 * spin_lock属性的字段。这里根据map的record来判断当前的field是否能够被
+	 * BPF程序或者helper函数所读写。
+	 */
 	for (i = 0; i < rec->cnt; i++) {
 		struct btf_field *field = &rec->fields[i];
 		u32 p = field->offset;
@@ -7774,6 +7805,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	if (size < 0)
 		return size;
 
+	/* 针对每一种类型的指针，对其访问的对其操作进行检查。 */
 	err = check_ptr_alignment(env, reg, off, size, strict_alignment_once);
 	if (err)
 		return err;
@@ -7784,6 +7816,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			return -EACCES;
 		}
 
+		/* 检查内存访问边界。 */
 		err = check_mem_region_access(env, regno, off, size,
 					      reg->map_ptr->key_size, false);
 		if (err)
@@ -7793,17 +7826,37 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	} else if (reg->type == PTR_TO_MAP_VALUE) {
 		struct btf_field *kptr_field = NULL;
 
+		/* 对于map内存的写操作，权限不足的话，不允许将指针类型的值存储到map */
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
 			verbose(env, "R%d leaks addr into map\n", value_regno);
 			return -EACCES;
 		}
+		/* 检查这个map里的value是否允许读或者写。这个在创建map的时候通过
+		 * 传入的flag来控制的。
+		 */
 		err = check_map_access_type(env, regno, off, size, t);
 		if (err)
 			return err;
+		/* 检查对于map的读写访问是否合法，这里主要是检查边界的合法性，同时
+		 * 针对map中的一些特殊字段，检查其偏移是否为常量。
+		 */
 		err = check_map_access(env, regno, off, size, false, ACCESS_DIRECT);
 		if (err)
 			return err;
+		/* 针对kptr的检查。kptr应该指的是一种通过调用kfunc的方式来分配
+		 * 特定的类型的对象，将将其指针保存到map中的机制。这个对象只能
+		 * 在BPF程序中访问，通过调用特定的kfunc的release函数来实现对象
+		 * 的释放，整个过程都是原子性的，可以保证数据的可靠性。
+		 *
+		 * 这里不仅可以保存内核中创建的指针，还可以保存通过bpf_obj_new
+		 * 的方式从BPF中创建的对象的指针，这个时候就没有reference的
+		 * 概念了。
+		 *
+		 * 在map定义的时候，kptr需要指定和内核中一致的结构体类型。在
+		 * 读取的时候，会将value寄存器的类型设置为对应的btf_type的id。
+		 * 在写的时候，也必须要保证src是对应的btf_type。
+		 */
 		if (tnum_is_const(reg->var_off))
 			kptr_field = btf_record_find(reg->map_ptr->record,
 						     off + reg->var_off.value, BPF_KPTR | BPF_UPTR);
@@ -7812,11 +7865,11 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		} else if (t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
-			/*
-			 * If map is read-only, track its contents as scalars,
-			 * unless it is an insn array (see the special case below)
-			 */
-			if (tnum_is_const(reg->var_off) &&
+				/*
+				 * If map is read-only, track its contents as scalars,
+				 * unless it is an insn array (see the special case below).
+				 */
+				if (tnum_is_const(reg->var_off) &&
 			    bpf_map_is_rdonly(map) &&
 			    map->ops->map_direct_value_addr &&
 			    map->map_type != BPF_MAP_TYPE_INSN_ARRAY) {
@@ -7996,6 +8049,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		err = check_ptr_to_btf_access(env, regs, regno, off, size, t,
 					      value_regno);
 	} else if (reg->type == CONST_PTR_TO_MAP) {
+		/* 访问的是bpf_map结构体本身，用于在BPF中获取一些元数据，比如map的
+		 * 长度等。
+		 */
 		err = check_ptr_to_map_access(env, regs, regno, off, size, t,
 					      value_regno);
 	} else if (base_type(reg->type) == PTR_TO_BUF) {
@@ -8050,6 +8106,7 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	int err;
 
 	/* check src operand */
+	/* 进行源寄存器的读检查和目的寄存器的写检查。 */
 	err = check_reg_arg(env, insn->src_reg, SRC_OP);
 	if (err)
 		return err;
@@ -8063,6 +8120,12 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	/* Check if (src_reg + off) is readable. The state of dst_reg will be
 	 * updated by this call.
+	 */
+	/* 内存访问过程中进行合法性检查的核心逻辑，这里是检查目标
+	 * 内存的可读合法性检查。这里好像默认BPF_LDX的模式是BPF_MEM
+	 * 或者BPF_MEMSX，没有其他的可能，这个在
+	 *   bpf_check -> resolve_pseudo_ldimm64 中已经做了合法性
+	 * 检查。
 	 */
 	err = check_mem_access(env, env->insn_idx, insn->src_reg, insn->off,
 			       BPF_SIZE(insn->code), BPF_READ, insn->dst_reg,
@@ -16132,11 +16195,17 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	int ret;
 
+	/* 安全性检查，这里主要就是检查对于位移操作，源寄存器需要为CONST；否则，将
+	 * 目的寄存器标记为unknow。
+	 */
 	if (!is_safe_to_compute_dst_reg_range(insn, &src_reg)) {
 		__mark_reg_unknown(env, dst_reg);
 		return 0;
 	}
 
+	/* ADD和SUB指令需要消毒。常量ALU的话，是可以跳过消毒的。当前的消毒状态如果
+	 * 不一致，会失败的。
+	 */
 	if (sanitize_needed(opcode)) {
 		ret = sanitize_val_alu(env, insn);
 		if (ret < 0)
@@ -16158,6 +16227,9 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 * tnum to calculate an approximation of the sign/unsigned bounds.
 	 */
 	switch (opcode) {
+	/* 对dst_reg的范围进行叠加，即所有的min/max都叠加上src_reg。如果存在溢出
+	 * 的情况，下面就将其设置为unbound。
+	 */
 	case BPF_ADD:
 		scalar32_min_max_add(dst_reg, &src_reg);
 		scalar_min_max_add(dst_reg, &src_reg);
@@ -16294,6 +16366,7 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	dst_reg = &regs[insn->dst_reg];
 	src_reg = NULL;
 
+	/* 如果是arena里的数据，那么无条件允许其进行ALU运算。 */
 	if (dst_reg->type == PTR_TO_ARENA) {
 		struct bpf_insn_aux_data *aux = cur_aux(env);
 
@@ -16311,6 +16384,22 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	if (dst_reg->type != SCALAR_VALUE)
 		ptr_reg = dst_reg;
 
+	/* 源操作数是寄存器，且源寄存器的类型和目的寄存器的类型都是指针，那么只允许
+	 * root用户做【减】操作，不允许其他的ALU操作。如果目的寄存器不是指针类型，
+	 * 那么这里就是指针和SCALAR的运算，调用adjust_ptr_min_max_vals()来进行
+	 * 指针的范围适配。
+	 *
+	 * 源操作数是寄存器，且类型是SCALAR_VALUE，且目的寄存器是指针，那么也是
+	 * 指针和SCALAR的运算，调用adjust_ptr_min_max_vals()来进行指针的范围适配。
+	 *
+	 * 对于指针+SCALAR的运算，这里还会进行精度标记（还没搞清楚原理）。
+	 *
+	 * 如果源操作数的IMM，就比较简单了，直接进行know的标记。如果目的寄存器是
+	 * 指针，这里还会进行adjust_ptr_min_max_vals()
+	 *
+	 * 如果都是SCALAR，那么会调用adjust_scalar_min_max_vals()来进行SCALAR
+	 * 的范围适配。
+	 */
 	if (BPF_SRC(insn->code) == BPF_X) {
 		src_reg = &regs[insn->src_reg];
 		if (src_reg->type != SCALAR_VALUE) {
@@ -16380,7 +16469,6 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
 	 */
 	u64 dst_umax = dst_reg->umax_value;
-
 	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 	if (err)
 		return err;
@@ -16392,6 +16480,17 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	 * use r1 in memory access
 	 * So remember constant delta between r2 and r1 and update r1 after
 	 * 'if' condition.
+	 */
+	/* 之前的对于寄存器传播性的跟踪都是在读的基础上的，即如果一个寄存器的parent
+	 * 被写了，那么就不会再链式跟踪这个链。而上面的那种情况又是一个比较常见的
+	 * 编译器处理过程，因此对于两个寄存器之间的差值是常量的情况，需要对其进行
+	 * 额外的处理逻辑来跟踪起来。
+	 *
+	 * 这里只针对ALU64的ADD运算，如果是这种运算，那么不清楚link id，而是给
+	 * 其加上一个BPF_ADD_CONST的标志。其他情况的运算，都是切断link，即清理掉
+	 * link id。这个link reg机制会在cond jump的时候被利用起来，它会调用
+	 * sync_linked_regs()来更新所有的id相同的寄存器的状态，包括栈中的spilled
+	 * reg的状态。
 	 */
 	if (env->bpf_capable &&
 	    (BPF_OP(insn->code) == BPF_ADD || BPF_OP(insn->code) == BPF_SUB) &&
@@ -16469,31 +16568,38 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			}
 		}
 
-		/* check src operand */
+		/* 对当前的指令要操作的寄存器进行检查，这里是将目的寄存器当做源
+		 * 操作数进行检查的，因为是原地操作。
+		 */
 		err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 		if (err)
 			return err;
 
+		/* 指针类型的寄存器变量不允许进行数学运算 */
 		if (is_pointer_value(env, insn->dst_reg)) {
 			verbose(env, "R%d pointer arithmetic prohibited\n",
 				insn->dst_reg);
 			return -EACCES;
 		}
 
-		/* check dest operand */
-		if ((opcode == BPF_NEG || opcode == BPF_END) &&
-		    regs[insn->dst_reg].type == SCALAR_VALUE) {
-			err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
+			/* check dest operand */
+			if ((opcode == BPF_NEG || opcode == BPF_END) &&
+			    regs[insn->dst_reg].type == SCALAR_VALUE) {
+				err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 			err = err ?: adjust_scalar_min_max_vals(env, insn,
 							 &regs[insn->dst_reg],
 							 regs[insn->dst_reg]);
-		} else {
-			err = check_reg_arg(env, insn->dst_reg, DST_OP);
-		}
-		if (err)
-			return err;
+			} else {
+				err = check_reg_arg(env, insn->dst_reg, DST_OP);
+			}
+			if (err)
+				return err;
 
 	} else if (opcode == BPF_MOV) {
+		/* 看样子MOV指令属于ALU类型的指令？它的作用是将立即数，或者是寄存器
+		 * 中的值设置到另一个寄存器中。这里会先对合法性进行检查，如果源
+		 * 是个寄存器，那么对其进行read检查。最后，对目标寄存器进行写检查。
+		 */
 
 		if (BPF_SRC(insn->code) == BPF_X) {
 			if (BPF_CLASS(insn->code) == BPF_ALU) {
@@ -16540,6 +16646,11 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			struct bpf_reg_state *dst_reg = regs + insn->dst_reg;
 
 			if (BPF_CLASS(insn->code) == BPF_ALU64) {
+				/* 对于BPF_X类型的MOV指令，其立即数应该为0才对。这里
+				 * 就对其立即数进行了重复利用，当其为1的时候，就
+				 * 代表当前是用于aren case的指令。这个需要编译器的
+				 * 支持。
+				 */
 				if (insn->imm) {
 					/* off == BPF_ADDR_SPACE_CAST */
 					mark_reg_unknown(env, regs, insn->dst_reg);
@@ -16549,6 +16660,10 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						dst_reg->subreg_def = env->insn_idx + 1;
 					}
 				} else if (insn->off == 0) {
+					/* 这个off看起来是被用作了长度，即将源寄存器中的
+					 * 数据按照什么数据类型来进行mov，包括
+					 * 1/2/4/8字节。如果是0，代表整体拷贝。
+					 */
 					/* case: R1 = R2
 					 * copy register state to dest reg
 					 */
@@ -16556,6 +16671,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					copy_register_state(dst_reg, src_reg);
 					dst_reg->subreg_def = DEF_NOT_SUBREG;
 				} else {
+					/* 这里应该是进行了类型转换（长度变了）。如果
+					 * 是指针类型的，这是不允许的。
+					 */
 					/* case: R1 = (s8, s16 s32)R2 */
 					if (is_pointer_value(env, insn->src_reg)) {
 						verbose(env,
@@ -16578,6 +16696,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					}
 				}
 			} else {
+				/* 指针类型的只能用ALU64类型的MOV指令。 */
 				/* R1 = (u32) R2 */
 				if (is_pointer_value(env, insn->src_reg)) {
 					verbose(env,
@@ -16622,6 +16741,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			 * remember the value we stored into this reg
 			 */
 			/* clear any state __mark_reg_known doesn't set */
+			/* 立即数的情况，这里会将寄存器的状态设置为know，因为立即数
+			 * 是提前预知的。
+			 */
 			mark_reg_unknown(env, regs, insn->dst_reg);
 			regs[insn->dst_reg].type = SCALAR_VALUE;
 			if (BPF_CLASS(insn->code) == BPF_ALU64) {
@@ -16639,6 +16761,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 
 	} else {	/* all other ALU ops: and, sub, xor, add, ... */
 
+		/* 除了赋值、取反和大小端运算外的，其他ALU/ALU64的指令的检查逻辑。
+		 * 这里是做一些简单的指令合法性的检查。
+		 */
 		if (BPF_SRC(insn->code) == BPF_X) {
 			if (insn->imm != 0 || (insn->off != 0 && insn->off != 1) ||
 			    (insn->off == 1 && opcode != BPF_MOD && opcode != BPF_DIV)) {
@@ -16657,17 +16782,21 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			}
 		}
 
-		/* check src2 operand */
+		/* ALU运算都会读取dst_reg，因此这里先对dst_reg进行读取检查 */
 		err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 		if (err)
 			return err;
 
+		/* 检查不能除以0，会导致内核异常的 */
 		if ((opcode == BPF_MOD || opcode == BPF_DIV) &&
 		    BPF_SRC(insn->code) == BPF_K && insn->imm == 0) {
 			verbose(env, "div by zero\n");
 			return -EINVAL;
 		}
 
+		/* 对于位移操作，这里检查其位移的长度不能超过当前目标长度（32或者64），
+		 * 且从这里可以看出来，位移操作需要是常量。
+		 */
 		if ((opcode == BPF_LSH || opcode == BPF_RSH ||
 		     opcode == BPF_ARSH) && BPF_SRC(insn->code) == BPF_K) {
 			int size = BPF_CLASS(insn->code) == BPF_ALU64 ? 64 : 32;
@@ -16678,13 +16807,17 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			}
 		}
 
-		/* check dest operand */
+		/* 将目的寄存器作为写操作进行检查，但是这个过程中不对其进行标记。 */
 		err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
+		/* 对变量的tnum进行跟踪，根据其运算来重新适配reg的min_max。这个
+		 * 在JUMP类指令中也会做类似的事情。
+		 */
 		err = err ?: adjust_reg_min_max_vals(env, insn);
 		if (err)
 			return err;
 	}
 
+	/* 各种检查边界是否合法，比如min不能大于max等 */
 	return reg_bounds_sanity_check(env, &regs[insn->dst_reg], "alu");
 }
 
@@ -17758,6 +17891,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
+	/* 根据两个分支，来更新这两个分支对应的link reg。如果源操作数是寄存器，这里会
+	 * 同时更新源操作数寄存器。
+	 */
 	if (BPF_SRC(insn->code) == BPF_X &&
 	    src_reg->type == SCALAR_VALUE && src_reg->id &&
 	    !WARN_ON_ONCE(src_reg->id != other_branch_regs[insn->src_reg].id)) {
@@ -21557,15 +21693,15 @@ static int do_check(struct bpf_verifier_env *env)
 			if (state->speculative && insn_aux->nospec)
 				goto process_bpf_exit;
 
-		err = bpf_reset_stack_write_marks(env, env->insn_idx);
-		if (err)
-			return err;
-		err = do_check_insn(env, &do_print_state);
-		if (err >= 0 || error_recoverable_with_nospec(err)) {
-			marks_err = bpf_commit_stack_write_marks(env);
-			if (marks_err)
-				return marks_err;
-		}
+			err = bpf_reset_stack_write_marks(env, env->insn_idx);
+			if (err)
+				return err;
+			err = do_check_insn(env, &do_print_state);
+			if (err >= 0 || error_recoverable_with_nospec(err)) {
+				marks_err = bpf_commit_stack_write_marks(env);
+				if (marks_err)
+					return marks_err;
+			}
 		if (error_recoverable_with_nospec(err) && state->speculative) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
@@ -21847,7 +21983,6 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		verbose(env, "program's hash doesn't match map's excl_prog_hash\n");
 		return -EACCES;
 	}
-
 	if (btf_record_has_field(map->record, BPF_LIST_HEAD) ||
 	    btf_record_has_field(map->record, BPF_RB_ROOT)) {
 		if (is_tracing_prog_type(prog_type)) {
@@ -21931,6 +22066,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EOPNOTSUPP;
 		}
 		env->prog->aux->arena = (void *)map;
+		/* 看样子arena类型的map必须要mmap到用户态空间去才行哦 */
 		if (!bpf_arena_get_user_vm_start(env->prog->aux->arena)) {
 			verbose(env, "arena's user address must be set via map_extra or mmap()\n");
 			return -EINVAL;
@@ -21955,6 +22091,7 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 		return -E2BIG;
 	}
 
+	/* 进行一些基本的map合法性检查。 */
 	err = check_map_prog_compatibility(env, map, env->prog);
 	if (err)
 		return err;
@@ -22082,6 +22219,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 					verbose(env, "fd_idx without fd_array is invalid\n");
 					return -EPROTO;
 				}
+				/* 根据索引找到对应的fd */
 				if (copy_from_bpfptr_offset(&fd, env->fd_array,
 							    insn[0].imm * sizeof(fd),
 							    sizeof(fd)))
@@ -22092,6 +22230,9 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				break;
 			}
 
+			/* 根据fd找到对应的map的实例，并将其加入到used_map数组中，
+			 * 并返回其在数组中的索引。
+			 */
 			map_idx = add_used_map(env, fd);
 			if (map_idx < 0)
 				return map_idx;
@@ -22106,7 +22247,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 			} else {
 				u32 off = insn[1].imm;
 
-				if (!map->ops->map_direct_value_addr) {
+					if (!map->ops->map_direct_value_addr) {
 					verbose(env, "no direct value access support for this map type\n");
 					return -EINVAL;
 				}
@@ -22122,6 +22263,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				addr += off;
 			}
 
+			/* 对指令中的地址进行修正 */
 			insn[0].imm = (u32)addr;
 			insn[1].imm = addr >> 32;
 
@@ -26308,6 +26450,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	env->prog = *prog;
 	env->ops = bpf_verifier_ops[env->prog->type];
 
+	/* 对BPF的访问权限进行初始化 */
 	env->allow_ptr_leaks = bpf_allow_ptr_leaks(env->prog->aux->token);
 	env->allow_uninit_stack = bpf_allow_uninit_stack(env->prog->aux->token);
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);

@@ -795,6 +795,10 @@ static void notrace *unit_alloc(struct bpf_mem_cache *c)
 	unsigned long flags;
 	int cnt = 0;
 
+	/* 从当前的cache的空闲列表中分配出来一个node实例，并返回。如果当前的
+	 * cache实例数量低于水线了，那么唤醒work来进行异步的内存分配。
+	 */
+
 	/* Disable irqs to prevent the following race for majority of prog types:
 	 * prog_A
 	 *   bpf_mem_alloc
@@ -901,6 +905,12 @@ void notrace *bpf_mem_alloc(struct bpf_mem_alloc *ma, size_t size)
 	int idx;
 	void *ret;
 
+	/* 有意思，看样子这里BPF模块实现了自己的类似kmalloc的功能，用于进行
+	 * 内存的管理。这里分配出去的内存，要么在BPF程序运行完后释放了，要么
+	 * 将指针保存在了MAP中，在MAP被释放的时候会被统一释放，因此是可以保证
+	 * 内存的安全性的。
+	 */
+
 	if (!size)
 		return NULL;
 
@@ -911,6 +921,7 @@ void notrace *bpf_mem_alloc(struct bpf_mem_alloc *ma, size_t size)
 		return NULL;
 
 	ret = unit_alloc(this_cpu_ptr(ma->caches)->cache + idx);
+	/* 跳过前面的LLIST，返回对应的内存地址 */
 	return !ret ? NULL : ret + LLIST_NODE_SZ;
 }
 

@@ -194,6 +194,7 @@ enum {
 enum btf_field_type {
 	BPF_SPIN_LOCK  = (1 << 0),
 	BPF_TIMER      = (1 << 1),
+	/* 这个代表的应该是这个kptr没有引用计数，可以存储PTR_UNTRUSTED类型的指针 */
 	BPF_KPTR_UNREF = (1 << 2),
 	BPF_KPTR_REF   = (1 << 3),
 	BPF_KPTR_PERCPU = (1 << 4),

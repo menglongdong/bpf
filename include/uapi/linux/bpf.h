@@ -24,6 +24,9 @@
 #define BPF_XADD	0xc0	/* exclusive add - legacy name */
 
 /* alu/jmp fields */
+/* 将一个寄存器中的值赋值到另外一个，类似于变量赋值。这里好像也可以用立即数，这种
+ * 情况下，和LD指令又有什么区别呢？
+ */
 #define BPF_MOV		0xb0	/* mov reg to reg */
 #define BPF_ARSH	0xc0	/* sign extending arithmetic shift right */
 
@@ -81,6 +84,7 @@ struct bpf_insn {
 	__u8	code;		/* opcode */
 	__u8	dst_reg:4;	/* dest register */
 	__u8	src_reg:4;	/* source register */
+	/* 在内存访问的时候，这里存储的是相对于src_reg中的指针的地址的偏移量 */
 	__s16	off;		/* signed offset */
 	__s32	imm;		/* signed immediate constant */
 };
@@ -1044,6 +1048,9 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_BLOOM_FILTER,
 	BPF_MAP_TYPE_USER_RINGBUF,
 	BPF_MAP_TYPE_CGRP_STORAGE,
+	/* 用于在BPF中动态分配物理内存（page）的map，所有分配的page信息会维护在
+	 * 这个MAP中。
+	 */
 	BPF_MAP_TYPE_ARENA,
 	BPF_MAP_TYPE_INSN_ARRAY,
 	__MAX_BPF_MAP_TYPE
@@ -1356,6 +1363,7 @@ enum {
  * verifier type:    CONST_PTR_TO_MAP
  */
 #define BPF_PSEUDO_MAP_FD	1
+/* map的fd在fd_array中的索引 */
 #define BPF_PSEUDO_MAP_IDX	5
 
 /* insn[0].src_reg:  BPF_PSEUDO_MAP_[IDX_]VALUE
@@ -1365,6 +1373,10 @@ enum {
  * insn[1].off:      0
  * ldimm64 rewrite:  address of map[0]+offset
  * verifier type:    PTR_TO_MAP_VALUE
+ */
+/* 直接对map中的数据进行访问的指令，这里会保存map的fd或者索引，对应的value的偏移。
+ * 在检查期间，会将其修正为具体的map value的地址。这个会调用map上的钩子函数
+ * map_direct_value_addr，目前仅array喝arena支持这种操作。
  */
 #define BPF_PSEUDO_MAP_VALUE		2
 #define BPF_PSEUDO_MAP_IDX_VALUE	6
@@ -1398,7 +1410,9 @@ enum {
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
  */
-/* call指令，且源寄存器是BPF_PSEUDO_CALL，说明当前是在调用另外一个BPF程序函数 */
+/* call指令，且源寄存器是BPF_PSEUDO_CALL，说明当前是在调用另外一个BPF程序函数。
+ * 默认状态下的call指令，都是针对helper，也就是说源寄存器中是0。
+ */
 #define BPF_PSEUDO_CALL		1
 /* when bpf_call->src_reg == BPF_PSEUDO_KFUNC_CALL,
  * bpf_call->imm == btf_id of a BTF_KIND_FUNC in the running kernel

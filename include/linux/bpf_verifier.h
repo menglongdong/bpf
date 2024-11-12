@@ -26,6 +26,32 @@
 /* Patch buffer size */
 #define INSN_BUF_SIZE 32
 
+/* Liveness marks, used for registers and spilled-regs (in stack slots).
+ * Read marks propagate upwards until they find a write mark; they record that
+ * "one of this state's descendants read this reg" (and therefore the reg is
+ * relevant for states_equal() checks).
+ * Write marks collect downwards and do not propagate; they record that "the
+ * straight-line code that reached this state (from its parent) wrote this reg"
+ * (and therefore that reads propagated from this state or its descendants
+ * should not propagate to its parent).
+ * A state with a write mark can receive read marks; it just won't propagate
+ * them to its parent, since the write mark is a property, not of the state,
+ * but of the link between it and its parent.  See mark_reg_read() and
+ * mark_stack_slot_read() in kernel/bpf/verifier.c.
+ */
+/* 这个是用于寄存器的传播性检查的。例如，reg1 = reg2; reg3 = reg1; 那么
+ *   reg3 -> reg1 -> reg2
+ * 就形成了一个链。当读reg3的时候，这个读操作会传播到reg1, reg2中。如果reg1被
+ * 写过了，那么这个传播将会终止。只有读会传播，写不会进行传播。
+ */
+enum bpf_reg_liveness {
+	REG_LIVE_NONE = 0, /* reg hasn't been read or written this branch */
+	REG_LIVE_READ32 = 0x1, /* reg was read, so we're sensitive to initial value */
+	REG_LIVE_READ64 = 0x2, /* likewise, but full 64-bit content matters */
+	REG_LIVE_READ = REG_LIVE_READ32 | REG_LIVE_READ64,
+	REG_LIVE_WRITTEN = 0x4, /* reg was written first, screening off later reads */
+	REG_LIVE_DONE = 0x8, /* liveness won't be updating this register anymore */
+};
 #define ITER_PREFIX "bpf_iter_"
 
 enum bpf_iter_state {
@@ -123,6 +149,10 @@ struct bpf_reg_state {
 	 * These refer to the same value as var_off, not necessarily the actual
 	 * contents of the register.
 	 */
+	/* 如果寄存器是指针类型的，那么这里的值应该是相对那个指针的偏移量。比如是
+	 * 一个PTR_TO_MAP_VALUE。如果是个指针，那么这个指针只能指向对应的实例，
+	 * 然后通过这里的bound来控制偏移。
+	 */
 	s64 smin_value; /* minimum possible (s64)value */
 	s64 smax_value; /* maximum possible (s64)value */
 	u64 umin_value; /* minimum possible (u64)value */
@@ -196,6 +226,10 @@ struct bpf_reg_state {
 	 * allowed and has the same effect as bpf_sk_release(sk).
 	 */
 	u32 ref_obj_id;
+	/* 用来检查寄存器之间的亲属关系，如reg1 = reg2，那么对reg1做的bound检查，
+	 * 也会更新到reg2上面去。
+	 */
+	struct bpf_reg_state *parent;
 	/* Inside the callee two registers can be both PTR_TO_STACK like
 	 * R1=fp-8 and R2=fp-8, but one of them points to this function stack
 	 * while another to the caller's stack. To differentiate them 'frameno'
@@ -209,6 +243,9 @@ struct bpf_reg_state {
 	 */
 	s32 subreg_def;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
+	/* 寄存器是否允许非精度，初始状态下，root用户为false（允许非精度），非root
+	 * 为true（必须为精度）。
+	 */
 	bool precise;
 };
 
@@ -527,7 +564,7 @@ struct bpf_iarray {
 	int cnt;
 	u32 items[];
 };
-
+/* 每个指令都有用于存储其元数据的结构体。 */
 struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
@@ -837,6 +874,7 @@ struct bpf_verifier_env {
 	u32 free_list_size;
 	u32 explored_states_size;
 	u32 num_backedges;
+	/* 加载BPF的时候由用户态传递下来的一个指针，存储的是所有的需要的资源的fd */
 	bpfptr_t fd_array;
 
 	/* bit mask to keep track of whether a register has been accessed

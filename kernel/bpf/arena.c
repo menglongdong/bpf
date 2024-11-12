@@ -47,7 +47,7 @@
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable);
-
+/* bpf_arena是一种在BPF中动态分配内存（page页）的机制。 */
 struct bpf_arena {
 	struct bpf_map map;
 	u64 user_vm_start;
