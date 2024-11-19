@@ -56,6 +56,12 @@ struct dst_entry {
 	 * Negative values are used by the implementation layer code to
 	 * force invocation of the dst_ops->check() method.
 	 */
+	/* 对于IPv4，这个值的初始值为DST_OBSOLETE_FORCE_CHK，意味着永远要对
+	 * dst进行检查。
+	 *
+	 * 这个值设置为其他的非0值，都会导致dst被废弃。同时，dst过期了的话，也会被
+	 * 废弃。
+	 */
 	short			obsolete;
 #define DST_OBSOLETE_NONE	0
 #define DST_OBSOLETE_DEAD	2

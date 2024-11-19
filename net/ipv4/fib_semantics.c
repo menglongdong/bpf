@@ -1934,6 +1934,8 @@ int fib_sync_down_dev(struct net_device *dev, unsigned long event, bool force)
 	struct fib_nh *nh;
 	int ret = 0;
 
+	/* 根据网口的状态，同步当前网口对应的所有的路由信息的状态。 */
+
 	if (force)
 		scope = -1;
 

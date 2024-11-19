@@ -145,6 +145,9 @@ struct net_device *__ip_dev_find(struct net *net, __be32 addr, bool devref)
 	struct net_device *result = NULL;
 	struct in_ifaddr *ifa;
 
+	/* 根据源地址查找对应的网口。如果没有找到的话，就用FIB的方式从local表中进行
+	 * 查找。
+	 */
 	rcu_read_lock();
 	ifa = inet_lookup_ifaddr_rcu(net, addr);
 	if (!ifa) {
@@ -1374,6 +1377,12 @@ __be32 inet_select_addr(const struct net_device *dev, __be32 dst, int scope)
 	if (unlikely(IN_DEV_ROUTE_LOCALNET(in_dev)))
 		localnet_scope = RT_SCOPE_LINK;
 
+	/* 遍历当前网口上所有的地址，根据指定的地址和作用域进行匹配。如果没有找到匹配的，
+	 * 就直接使用当前第一个可用的地址？
+	 *
+	 * 这里是为目的地址选取一个源地址，因此优先选取在同一个网段的地址。如果没有的话，
+	 * 就选取一个任意可用的地址。
+	 */
 	in_dev_for_each_ifa_rcu(ifa, in_dev) {
 		if (READ_ONCE(ifa->ifa_flags) & IFA_F_SECONDARY)
 			continue;

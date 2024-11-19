@@ -1430,6 +1430,14 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 	unsigned long index;
 	t_key cindex;
 
+	/* fib表查找步骤。
+	 * 
+	 * 首先，进行前缀查找，可以看出来前缀的优先级最高。这里，看样子属于同一
+	 * 级别的路由项放到了同一个链表中？从最高的前缀开始查找，
+	 * 
+	 * 
+	 */
+
 	pn = t->kv;
 	cindex = 0;
 
@@ -2381,6 +2389,7 @@ void __init fib_trie_init(void)
 					   0, SLAB_PANIC | SLAB_ACCOUNT, NULL);
 }
 
+/* 分配并初始化一张fib表 */
 struct fib_table *fib_trie_table(u32 id, struct fib_table *alias)
 {
 	struct fib_table *tb;

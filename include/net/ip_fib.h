@@ -294,6 +294,7 @@ void fib_free_table(struct fib_table *tb);
 #define TABLE_LOCAL_INDEX	(RT_TABLE_LOCAL & (FIB_TABLE_HASHSZ - 1))
 #define TABLE_MAIN_INDEX	(RT_TABLE_MAIN  & (FIB_TABLE_HASHSZ - 1))
 
+/* 不支持策略路由的情况下，获取路由表只会获取到local和main两个表。 */
 static inline struct fib_table *fib_get_table(struct net *net, u32 id)
 {
 	struct hlist_node *tb_hlist;
@@ -308,6 +309,7 @@ static inline struct fib_table *fib_get_table(struct net *net, u32 id)
 	return hlist_entry(tb_hlist, struct fib_table, tb_hlist);
 }
 
+/* 不支持策略路由的情況下，不能新建路由表。这里会直接返回目标表。 */
 static inline struct fib_table *fib_new_table(struct net *net, u32 id)
 {
 	return fib_get_table(net, id);
@@ -318,6 +320,17 @@ static inline int fib_lookup(struct net *net, const struct flowi4 *flp,
 {
 	struct fib_table *tb;
 	int err = -ENETUNREACH;
+
+	/* 这个函数会根据fl4中的地址信息，从main表中进行路由项的查找。注意：
+	 * 在提交 0ddcf43d5d4a("ipv4: FIB Local/MAIN table collapse")中，
+	 * main和local表被放到一起进行维护了。
+	 * 
+	 * 在以前的版本里面，每次都会先从local表中查找，找不到的话再从main表
+	 * 中查找，效率比较低。这个补丁将local和main的数据放到一起维护了，每次
+	 * 只需要进行一次查找即可。
+	 * 
+	 * 这个版本是不支持策略路由的版本，因此只会查找这两个表。
+	 */
 
 	rcu_read_lock();
 
@@ -376,6 +389,11 @@ static inline int fib_lookup(struct net *net, struct flowi4 *flp,
 {
 	struct fib_table *tb;
 	int err = -ENETUNREACH;
+
+	/* 支持策略路由的路由查找版本。这种情况下，会先查看是否存在策略路由项。
+	 * 如果不存在的话，那么逻辑和之前的基本相同，即先查找local/main/default
+	 * 表。
+	 */
 
 	flags |= FIB_LOOKUP_NOREF;
 	if (net->ipv4.fib_has_custom_rules)

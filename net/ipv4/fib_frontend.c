@@ -54,6 +54,10 @@ static int __net_init fib4_rules_init(struct net *net)
 {
 	struct fib_table *local_table, *main_table;
 
+	/* 这里分配并初始化了两个表：local和mian。其中，local表中的数据是指向了
+	 * main的。这里是没有支持策略路由的情况下的逻辑。
+	 */
+
 	main_table  = fib_trie_table(RT_TABLE_MAIN, NULL);
 	if (!main_table)
 		return -ENOMEM;
@@ -85,6 +89,9 @@ struct fib_table *fib_new_table(struct net *net, u32 id)
 	if (tb)
 		return tb;
 
+	/* 在存在策略路由的情况下，不再合并local和main表。否则，配置了策略路由
+	 * 的情况和不支持策略路由的情况下的main和local表相同。
+	 */
 	if (id == RT_TABLE_LOCAL && !net->ipv4.fib_has_custom_rules)
 		alias = fib_new_table(net, RT_TABLE_MAIN);
 
@@ -115,6 +122,10 @@ struct fib_table *fib_get_table(struct net *net, u32 id)
 	struct fib_table *tb;
 	struct hlist_head *head;
 	unsigned int h;
+
+	/* 支持策略路由的情况下，可以获取到很多表。其中，local和main表
+	 * 没有放到下面的哈希表中，而是直接放到了netns中。
+	 */
 
 	if (id == 0)
 		id = RT_TABLE_MAIN;
@@ -377,8 +388,13 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 		swap(fl4.fl4_sport, fl4.fl4_dport);
 	}
 
+	/* 根据报文的源地址进行路由查找。没有找到对应的路由的话，说明源地址不可达？
+	 * 不再进行下面的处理。在last_resort里面，会检查rpfilter是否开启。没有开
+	 * 启的话，说明不用做验证。
+	 */
 	if (fib_lookup(net, &fl4, &res, 0))
 		goto last_resort;
+	/* 源地址是本机地址，且那个网口上没有开启local_accept选项 */
 	if (res.type != RTN_UNICAST) {
 		if (res.type != RTN_LOCAL) {
 			reason = SKB_DROP_REASON_IP_INVALID_SOURCE;
@@ -390,18 +406,22 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	}
 	fib_combine_itag(itag, &res);
 
+	/* 判断当前路由的下一条设备和dev是否匹配。 */
 	dev_match = fib_info_nh_uses_dev(res.fi, dev);
-	/* This is not common, loopback packets retain skb_dst so normally they
-	 * would not even hit this slow path.
-	 */
+	/* 按照英文注释，这里应该不会匹配，因为loop设备会存留dst，不会走到这里 */
 	dev_match = dev_match || (res.type == RTN_LOCAL &&
 				  dev == net->loopback_dev);
+	/* 设备匹配的话，就不需要后面的处理了。 */
 	if (dev_match) {
 		ret = FIB_RES_NHC(res)->nhc_scope >= RT_SCOPE_HOST;
 		return ret;
 	}
+	/* 当前网口上没有配置地址，就不用进行下面的路由查找了 */
 	if (no_addr)
 		goto last_resort;
+	/* rpf为1的话，进行严格模式的rp filter。这种情况下，找到了反向的路由，
+	 * 但是路由的设备和当前设备不匹配。
+	 */
 	if (rpf == 1)
 		goto e_rpf;
 	fl4.flowi4_oif = dev->ifindex;
@@ -433,6 +453,7 @@ int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 	int r = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(idev);
 	struct net *net = dev_net(dev);
 
+	/* 如果当前网口没有开启rpfilter，并且 */
 	if (!r && !fib_num_tclassid_users(net) &&
 	    (dev->ifindex != oif || !IN_DEV_TX_REDIRECTS(idev))) {
 		if (IN_DEV_ACCEPT_LOCAL(idev))
@@ -441,12 +462,11 @@ int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
 		 * only will be too optimistic, with custom rules, checking
 		 * local addresses only can be too strict, e.g. due to vrf
 		 */
+		/* 存在策略路由，或者local路由表被修改过的话，就做全量的检查 */
 		if (net->ipv4.fib_has_custom_local_routes ||
 		    fib4_has_custom_rules(net))
 			goto full_check;
-		/* Within the same container, it is regarded as a martian source,
-		 * and the same host but different containers are not.
-		 */
+		/* 源地址是本地地址的话，就违法？ */
 		if (inet_lookup_ifaddr_rcu(net, src))
 			return -SKB_DROP_REASON_IP_LOCAL_SOURCE;
 
@@ -1452,6 +1472,11 @@ static void nl_fib_lookup_exit(struct net *net)
 static void fib_disable_ip(struct net_device *dev, unsigned long event,
 			   bool force)
 {
+	/* fib_sync_down_dev里面会根据事件来修改对应的路由的状态，在fib_flush里面
+	 * 会根据路由的状态来移除不需要的路由。
+	 *
+	 * 如果成功移除了路由，那么同时会调用rt_cache_flush来移除路由缓存的。
+	 */
 	if (fib_sync_down_dev(dev, event, force))
 		fib_flush(dev_net(dev));
 	else

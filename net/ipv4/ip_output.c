@@ -498,6 +498,9 @@ int __ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 			goto no_route;
 		sk_setup_caps(sk, &rt->dst);
 	}
+	/* 将dst设置到skb上面。由于这里的dst已经被缓存到了sk上面，因此这里设置
+	 * 的时候不再去增加它的引用了？
+	 */
 	skb_dst_set_noref(skb, &rt->dst);
 
 packet_routed:

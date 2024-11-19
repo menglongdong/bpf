@@ -295,6 +295,11 @@ struct netns_ipv4 {
 
 	atomic_t	rt_genid;
 	siphash_key_t	ip_id_key;
+	/* 本机所有使用到的IPv4地址都会在这个哈希表中。通过这个哈希表，用户可以快速地通过
+	 * 提供的地址来查找到这个地址对应的网口设备等信息。
+	 *
+	 * 同一个IP地址可能会被多个网口使用，这里会为每个网口上的IP地址都创建一份实例。
+	 */
 	struct hlist_head	*inet_addr_lst;
 	struct delayed_work	addr_chk_work;
 };

@@ -2628,6 +2628,7 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 	const struct net_device *dev;
 	u32 max_segs = 1;
 
+	/* 将dst缓存到sk上面，同时利用dst上的信息初始化套接字能力。 */
 	rcu_read_lock();
 	dev = dst_dev_rcu(dst);
 	sk->sk_route_caps = dev->features;

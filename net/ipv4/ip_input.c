@@ -372,6 +372,10 @@ static int ip_rcv_finish_core(struct net *net,
 	} else {
 		struct in_device *in_dev = __in_dev_get_rcu(dev);
 
+		/* 如果是loop地址，那么就会走到这里吧？发包的时候报文的路由信息
+		 * 已经设置好了的。
+		 */
+
 		if (in_dev && IN_DEV_ORCONF(in_dev, NOPOLICY))
 			IPCB(skb)->flags |= IPSKB_NOPOLICY;
 	}

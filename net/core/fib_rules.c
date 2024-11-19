@@ -316,6 +316,10 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 	struct fib_rule *rule;
 	int err;
 
+	/* 策略路由的查找逻辑。遍历所有的规则，对于命中的规则根据其action来自行
+	 * 下一步的动作。
+	 */
+
 	rcu_read_lock();
 
 	list_for_each_entry_rcu(rule, &ops->rules_list, list) {
@@ -323,6 +327,9 @@ jumped:
 		if (!fib_rule_match(rule, ops, fl, flags, arg))
 			continue;
 
+		/* 对于NOP和goto类型的action，直接在这里进行处理。其余的
+		 * action，在fib4_rule_action中进行处理。
+		 */
 		if (rule->action == FR_ACT_GOTO) {
 			struct fib_rule *target;
 
@@ -341,6 +348,10 @@ jumped:
 					       fib4_rule_action,
 					       rule, fl, flags, arg);
 
+		/* 策略路由抑制？当规则已经命中了报文，并且从对应的路由表中已经
+		 * 选取到了对应的路由项，这时候再匹配一下该路由项能否满足这条
+		 * 规则上的一些条件。
+		 */
 		if (!err && ops->suppress && INDIRECT_CALL_MT(ops->suppress,
 							      fib6_rule_suppress,
 							      fib4_rule_suppress,

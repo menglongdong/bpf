@@ -133,6 +133,9 @@ INDIRECT_CALLABLE_SCOPE int fib4_rule_action(struct fib_rule *rule,
 
 	rcu_read_lock();
 
+	/* 能走到这里的就只有跳转到table的action了。这里会根据rule了设置的table
+	 * 的id来查找到对应的table，然后再调用常规的方式进行table表的查找。
+	 */
 	tb_id = fib_rule_get_table(rule, arg);
 	tbl = fib_get_table(rule->fr_net, tb_id);
 	if (tbl)
@@ -509,6 +512,7 @@ int __net_init fib4_rules_init(struct net *net)
 	if (IS_ERR(ops))
 		return PTR_ERR(ops);
 
+	/* 初始化默认的路由表，包括local/main/default三个。 */
 	err = fib_default_rules_init(ops);
 	if (err < 0)
 		goto fail;

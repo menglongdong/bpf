@@ -1492,6 +1492,8 @@ static bool rt_cache_route(struct fib_nh_common *nhc, struct rtable *rt)
 	struct rtable *orig, *prev, **p;
 	bool ret = true;
 
+	/* 这个函数的作用是将rt缓存到nhc上面的 */
+
 	if (rt_is_input_route(rt)) {
 		p = (struct rtable **)&nhc->nhc_rth_input;
 	} else {
@@ -1503,6 +1505,11 @@ static bool rt_cache_route(struct fib_nh_common *nhc, struct rtable *rt)
 	 * on this dst
 	 */
 	dst_hold(&rt->dst);
+	/* 将old和ptr指向内容作比较，如果相等那么将new写入ptr中，返回old；否则，不行等就返回
+	 * ptr的内容。EAX是提供返回使用的。
+	 *
+	 * 原型：cmpchg(ptr, old, new)
+	 */
 	prev = cmpxchg(p, orig, rt);
 	if (prev == orig) {
 		if (orig) {
@@ -2315,8 +2322,8 @@ ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		goto martian_destination;
 	}
 
-	/* Following code try to avoid calling IN_DEV_NET_ROUTE_LOCALNET(),
-	 * and call it once if daddr or/and saddr are loopback addresses
+	/* 对源地址和目的地址的合法性检修检查。如果源地址或者目的地址是loop地址，
+	 * 但是对应的dev不是local设备，那么就非法。
 	 */
 	if (ipv4_is_loopback(daddr)) {
 		if (!IN_DEV_NET_ROUTE_LOCALNET(in_dev, net)) {
@@ -2353,7 +2360,11 @@ ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		fl4.fl4_dport = 0;
 	}
 
+	/* 进行路由表的查找。可以看出来，这里的查找逻辑和发包的时候相同，都是使用
+	 * 报文的目的地址进行查找（非策略路由），没有方向之分。
+	 */
 	err = fib_lookup(net, &fl4, res, 0);
+	/* 没有查找到路由，说明报文本机不能接受，且无法进行转发。 */
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
 			err = -EHOSTUNREACH;
@@ -2370,6 +2381,7 @@ ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	}
 
 	err = -EINVAL;
+	/* 这是一个发往本机的报文，这里会对其进行路由验证。 */
 	if (res->type == RTN_LOCAL) {
 		reason = fib_validate_source_reason(skb, saddr, daddr, dscp,
 						    0, dev, in_dev, &itag);
@@ -2414,6 +2426,7 @@ local_input:
 	if (IN_DEV_ORCONF(in_dev, NOPOLICY))
 		IPCB(skb)->flags |= IPSKB_NOPOLICY;
 
+	/* 如果找到了路由项，并且itag为0，那么进行路由项的缓存，也就是路由缓存 */
 	do_cache &= res->fi && !itag;
 	if (do_cache) {
 		struct fib_nh_common *nhc = FIB_RES_NHC(*res);
@@ -2426,6 +2439,7 @@ local_input:
 		}
 	}
 
+	/* 进行路由缓存的创建 */
 	rth = rt_dst_alloc(ip_rt_get_dev(net, res),
 			   flags | RTCF_LOCAL, res->type, false);
 	if (!rth)
@@ -2595,6 +2609,9 @@ static struct rtable *__mkroute_output(const struct fib_result *res,
 	if (dev_out->flags & IFF_LOOPBACK)
 		flags |= RTCF_LOCAL;
 
+	/* 检查是否需要构建路由缓存。例如，广播和多播地址是不会进行路由缓存的。这里的路由
+	 * 缓存指的是将路由缓存到对应的路由项中？
+	 */
 	do_cache = true;
 	if (type == RTN_BROADCAST) {
 		flags |= RTCF_BROADCAST | RTCF_LOCAL;
@@ -2652,6 +2669,9 @@ static struct rtable *__mkroute_output(const struct fib_result *res,
 	}
 
 add:
+	/* 分配dst，并将output默认初始化为ip_output。如果是本地地址，那么将
+	 * input初始化为ip_local_deliver
+	 */
 	rth = rt_dst_alloc(dev_out, flags, type,
 			   IN_DEV_ORCONF(in_dev, NOXFRM));
 	if (!rth)
@@ -2719,6 +2739,7 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 	struct rtable *rth;
 	int err;
 
+	/* 如果指定了源地址，那么做一些合法性检查，以及为多播查找out dev */
 	if (fl4->saddr) {
 		if (ipv4_is_multicast(fl4->saddr) ||
 		    ipv4_is_lbcast(fl4->saddr)) {
@@ -2736,6 +2757,9 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		 *    of another iface. --ANK
 		 */
 
+		/* 目的地址是多播的话，根据源地址查找对应的出口设备。这种情况下，不使用
+		 * main路由表中的信息来进行路由。
+		 */
 		if (fl4->flowi4_oif == 0 &&
 		    (ipv4_is_multicast(fl4->daddr) ||
 		     ipv4_is_lbcast(fl4->daddr))) {
@@ -2771,6 +2795,9 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 	}
 
 
+	/* 已经确定了出口的情况下的逻辑。没有指定源地址且没有指定目的地址的情况下，
+	 * 调用inet_select_addr从出口的网口上选取一个IP地址作为源地址。
+	 */
 	if (fl4->flowi4_oif) {
 		dev_out = dev_get_by_index_rcu(net, fl4->flowi4_oif);
 		rth = ERR_PTR(-ENODEV);
@@ -2800,6 +2827,9 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		}
 	}
 
+	/* 没有自定目的地址，就将源地址作为目的地址。源地址也没有指定的话，就将loop
+	 * 地址作为两者的地址。
+	 */
 	if (!fl4->daddr) {
 		fl4->daddr = fl4->saddr;
 		if (!fl4->daddr)
@@ -2810,6 +2840,10 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		flags |= RTCF_LOCAL;
 		goto make_route;
 	}
+
+	/* 从上面可以看出来，如果当前指定了出口的网口，那么会将目的地址和源地址都确定
+	 * 下面。
+	 */
 
 	err = fib_lookup(net, fl4, res, 0);
 	if (err) {
@@ -2845,6 +2879,9 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 		goto out;
 	}
 
+	/* 可以看出来，如果路由的类型是LOCAL类型的，那么这里会把报文的出口网口
+	 * 设置成loop设备。这也是为什么报文可以返回到内核协议栈中。
+	 */
 	if (res->type == RTN_LOCAL) {
 		if (!fl4->saddr) {
 			if (res->fi->fib_prefsrc)
@@ -2853,7 +2890,9 @@ struct rtable *ip_route_output_key_hash_rcu(struct net *net, struct flowi4 *fl4,
 				fl4->saddr = fl4->daddr;
 		}
 
-		/* L3 master device is the loopback for that domain */
+		/* 如果目标网口上有L3 master设备，那就将目标网口设置成master
+		 * 网口。
+		 */
 		dev_out = l3mdev_master_dev_rcu(FIB_RES_DEV(*res)) ? :
 			net->loopback_dev;
 
