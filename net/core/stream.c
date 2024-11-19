@@ -126,6 +126,12 @@ int sk_stream_wait_memory(struct sock *sk, long *timeo_p)
 	long current_timeo = *timeo_p;
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 
+	/* 
+	 * 创建一个wait实例，并将其添加到sk等待队列中。当存在skb释放的时候，
+	 * sock_wfree->sk_stream_write_space会被调用，会调用
+	 * woken_wake_function方法唤醒当前等待队列上的进程。
+	 */
+
 	if (sk_stream_memory_free(sk))
 		current_timeo = vm_wait = get_random_u32_below(HZ / 5) + 2;
 
@@ -146,6 +152,9 @@ int sk_stream_wait_memory(struct sock *sk, long *timeo_p)
 
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		sk->sk_write_pending++;
+		/* 在第三个参数为true的情况下，会将当前进程设置为睡眠状态，
+		 * 并进行主调度。
+		 */
 		ret = sk_wait_event(sk, &current_timeo, READ_ONCE(sk->sk_err) ||
 				    (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN) ||
 				    (sk_stream_memory_free(sk) && !vm_wait),

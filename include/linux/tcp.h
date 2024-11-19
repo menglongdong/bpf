@@ -220,11 +220,17 @@ struct tcp_sock {
 	/* TXRX read-mostly hotpath cache lines */
 	__cacheline_group_begin(tcp_sock_read_txrx);
 	u32	tsoffset;	/* timestamp offset */
+	/* 发送窗口大小（SYN协商出来的那个）。 */
 	u32	snd_wnd;	/* The window we expect to receive	*/
 	u32	mss_cache;	/* Cached effective mss, not including SACKS */
 	u32	snd_cwnd;	/* Sending congestion window		*/
+	/* 拥塞状态下，所有发送出去的数据，包括重传的数据。 */
 	u32	prr_out;	/* Total number of pkts sent during Recovery. */
 	u32	lost_out;	/* Lost packets			*/
+	/*
+	 * 对于不支持SACK的场景，使用reno算法。该字段用于为该算法服务，
+	 * 用于记录重复ACK的数量。
+	 */
 	u32	sacked_out;	/* SACK'd packets			*/
 	u16	tcp_header_len;	/* Bytes of tcp header to send		*/
 	u8	scaling_ratio;	/* see tcp_win_from_space() */
@@ -232,6 +238,7 @@ struct tcp_sock {
 		repair      : 1,
 		tcp_usec_ts : 1, /* TSval values in usec */
 		is_sack_reneg:1,    /* in recovery from loss with SACK reneg? */
+		/* 数据的发送被拥塞窗口限制住了。 */
 		is_cwnd_limited:1,/* forward progress limited by snd_cwnd? */
 		recvmsg_inq : 1;/* Indicate # of bytes in queue upon recvmsg */
 	__cacheline_group_end(tcp_sock_read_txrx);
@@ -300,8 +307,11 @@ struct tcp_sock {
 	__be32	pred_flags;
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
+	/* 下一个要接收的数据 */
 	u32	rcv_nxt;	/* What we want to receive next		*/
+	/* 下一个要发送的数据，也就是当前窗口已发送的最后一个数据。*/
 	u32	snd_nxt;	/* Next sequence we send		*/
+	/* 当前发送窗口的第一个字节。*/
 	u32	snd_una;	/* First byte we want an ack for	*/
 	u32	window_clamp;	/* Maximal window to advertise		*/
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
@@ -315,6 +325,7 @@ struct tcp_sock {
 					* and INET_ECN_CE
 					*/
 	u32	app_limited;	/* limited until "delivered" reaches this val */
+	/* 当前接收窗口的大小 */
 	u32	rcv_wnd;	/* Current receiver window		*/
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
 /*
@@ -336,6 +347,13 @@ struct tcp_sock {
 	u32	data_segs_in;	/* RFC4898 tcpEStatsPerfDataSegsIn
 				 * total number of data segments in.
 				 */
+	/* 
+	 * 只有当我们在 tcp_select_window() 中发送 ACK 时，tp->rcv_wup 才与
+	 * 要接收的下一个字节（tp->rcv_nxt）同步。
+	 * 也就是说，rcv_wup指的是已经收到的连续报文的还未发送ACK的数据的最大序列号，
+	 * 其<=rcv_nxt。可以看出来，这个属性是用来延迟发送ACK的，即进行数据的累加
+	 * 确认。
+	 */
 	u32	rcv_wup;	/* rcv_nxt on last window update sent	*/
 	u32	max_packets_out;  /* max packets_out in last window */
 	u32	cwnd_usage_seq;  /* right edge of cwnd usage tracking flight */
@@ -375,7 +393,21 @@ struct tcp_sock {
 	u32	compressed_ack_rcv_nxt;
 	struct list_head tsq_node; /* anchor in tsq_tasklet.head list */
 
-	/* Information of the most recently (s)acked skb */
+	/*
+	 * rack算法相关的实现。rack（recent ack）是一种探测丢包的方法，与快速重传算法
+	 * 并驾齐驱。
+	 *
+	 * 算法思想：
+	 * 1、每次收到ack，先更新rtt_min，然后更新乱序时间窗口reo_wnd
+	 *   （reo_wnd=max(rtt_min/4, 1ms)）；
+	 * 2、更新最新的被确认的数据包的发送时间，在mstamp中，其中advanced表示mstamp
+	 *   是否被更新过。这里的最新的指的是发送时间最大的被sack确认的报文。
+	 * 3、将符合条件的包标记为丢失。对于所有的已经发送的报文，如果其发送时间距离mstamp
+	 *   超过了reo_wnd，那么将其标记为lost。
+	 *
+	 * 基本思想很简单：对于已经被sack确认的前面的未被确认的报文，如果时间差超过了乱序
+	 * 的阀值，那么认为其已经丢失。
+	 */
 	struct tcp_rack {
 		u64 mstamp; /* (Re)sent time of the skb */
 		u32 rtt_us;  /* Associated RTT */
@@ -396,6 +428,10 @@ struct tcp_sock {
 		fastopen_connect:1, /* FASTOPEN_CONNECT sockopt */
 		fastopen_no_cookie:1, /* Allow send/recv SYN+data without a cookie */
 		fastopen_client_fail:2, /* reason why fastopen failed */
+	/*
+	 * 标记是否启用了FRTO算法。如果启用了该算法，那么TCP依然会进入LOSS状态，
+	 * 只不过在LOSS处理过程中会先判断FRTO的状态，再决定是否真的进入恢复状态。
+	 */
 		frto        : 1;/* F-RTO (RFC5682) activated in CA_Loss */
 	u8	repair_queue;
 	u8	save_syn:2,	/* Save headers of SYN packet */
@@ -419,11 +455,14 @@ struct tcp_sock {
 /*
  *	Slow start and congestion control (see also Nagle, and Karn & Partridge)
  */
+	/* 拥塞窗口计数，统计本次窗口内报文的累计发送量。 */
 	u32	snd_cwnd_cnt;	/* Linear increase counter		*/
+	/* 拥塞窗口的上限值。 */
 	u32	snd_cwnd_clamp; /* Do not allow snd_cwnd to grow above this */
 	u32	snd_cwnd_used;
 	u32	snd_cwnd_stamp;
 	u32	prior_cwnd;	/* cwnd right before starting loss recovery */
+	/* 拥塞状态下，新发送的数据 */
 	u32	prr_delivered;	/* Number of newly delivered packets to
 				 * receiver in Recovery. */
 	u32	last_oow_ack_time;  /* timestamp of last out-of-window ACK */
@@ -439,13 +478,17 @@ struct tcp_sock {
 
 	struct tcp_sack_block recv_sack_cache[4];
 
+	/* 先前保存的拥塞阀值，用于进行恢复，比如发现了伪重传等。 */
 	u32	prior_ssthresh; /* ssthresh saved at recovery start	*/
+	/* TCP拥塞控制的恢复点 */
 	u32	high_seq;	/* snd_nxt at onset of congestion	*/
 
+	/* 最后一个重传的报文的发送时间，可用于基于TS的伪超时检测。 */
 	u32	retrans_stamp;	/* Timestamp of the last retransmit,
 				 * also used in SYN-SENT to remember stamp of
 				 * the first SYN. */
 	u32	undo_marker;	/* snd_una upon a new recovery episode. */
+	/* 可撤销的重传计数，即在可撤销拥塞状态重传的报文数量。 */
 	int	undo_retrans;	/* number of undoable retransmissions. */
 	u32	mtu_info; /* We received an ICMP_FRAG_NEEDED / ICMPV6_PKT_TOOBIG
 			   * while socket was owned by user.

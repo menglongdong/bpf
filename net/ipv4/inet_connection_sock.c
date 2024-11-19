@@ -254,6 +254,22 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 	reuseport_cb_ok = !reuseport_cb || READ_ONCE(reuseport_cb->num_closed_socks);
 	rcu_read_unlock();
 
+	/*
+	 * sock绑定的时候冲突检测，在以下情况下认为sock不冲突：
+	 * 
+	 * 1、两个都绑定了网口，并且绑定的不是一个网口；
+	 * 2、地址复用：两个套接口都启用了地址复用，且没有套接口处于listen状态下。
+	 *    当存在listen状态下的端口时，地址复用不起作用，此时禁止绑定。
+	 * 3、端口复用：两个套接口都启用了端口复用功能，且两个
+	 *    套接口属于同一个用户，或者某一个处于TCP_TIME_WAIT状态。
+	 *    对于UDP，它会均匀的将报文分发给所有的套接口；
+	 *    对于都启用了端口复用的listen状态的TCP，它会均匀地分发accept给所有
+	 *    listen套接口。
+	 * 4、两个目的地址不同，且都不是0（0认为匹配所有的地址）。
+	 *
+	 * 其他情况下，绑定端口相同都会认为冲突。
+	 */
+
 	/* Conflicts with an existing IPV6_ADDR_ANY (if ipv6) or INADDR_ANY (if
 	 * ipv4) should have been checked already. We need to do these two
 	 * checks separately because their spinlocks have to be acquired/released
@@ -384,6 +400,7 @@ other_parity_scan:
 		head2 = inet_bhashfn_portaddr(hinfo, sk, net, port);
 		spin_lock(&head2->lock);
 		tb2 = inet_bind2_bucket_find(head2, net, port, l3mdev, sk);
+		/* 遍历hash链表，找到匹配的端口，能找到的话说明当前端口已经被使用了 */
 		inet_bind_bucket_for_each(tb, &head->chain)
 			if (inet_bind_bucket_match(tb, net, port, l3mdev)) {
 				if (!inet_csk_bind_conflict(sk, tb, tb2,
@@ -525,6 +542,12 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	bool head2_lock_acquired = false;
 	struct net *net = sock_net(sk);
 
+	/* 
+	 * 该函数的总体思路为：如果没有指定要绑定的端口，那么调用
+	 * inet_csk_find_open_port来从空闲端口中随机分配一个；否则，从BHASH表中
+	 * 进行查找，检测是否与现有绑定冲突。不冲突的话，将其绑定到BHASH表中。
+	 */
+
 	l3mdev = inet_sk_bound_l3mdev(sk);
 
 	if (!port) {
@@ -538,9 +561,20 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 			goto success;
 		found_port = true;
 	} else {
+		/* 
+		 * 通过HASH算法，找到对应的桶（bucket）。由于端口与套接口并不是一对一的关系，
+		 * 所以这个桶里存放的并不是套接口，而是另一个结构体：inet_bind_bucket。
+		 * 
+		 * 这个结构体起到了对端口进行管理的功能，比如当前端口是否是可重用端口、所属的
+		 * 网络命名空间，并且其又使用了一个HASH表将使用本端口的套接口管理了起来。
+		 */
 		head = &hinfo->bhash[inet_bhashfn(net, port,
 						  hinfo->bhash_size)];
 		spin_lock_bh(&head->lock);
+		/* 
+		 * 遍历桶，找到port对应的inet_bind_bucket。如果没有找到，那么说明这个端口
+		 * 还没有被使用过，那么下面会为这个端口重新分配一个inet_bind_bucket。
+		 */
 		inet_bind_bucket_for_each(tb, &head->chain)
 			if (inet_bind_bucket_match(tb, net, port, l3mdev))
 				break;
@@ -555,7 +589,19 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	}
 
 	if (!found_port) {
+		/* 
+		 * tb->owners存储的是使用port的套接口，如果为空的话，就不需要进行什么检测了
+		 * 否则，需要进行一系列的检查。
+		 */
 		if (!hlist_empty(&tb->bhash2)) {
+			/* 
+			 * 如果指定了可以地址重用，并且类型是强制重用，那么不进行任何检测，
+			 * 直接强行绑定。这部分可以不用太关注，这是TCP_REPAIR部分的功能。
+			 * 
+			 * 同时这里进行地址重用和端口重用检测，如果通过的话，那么直接进行绑定
+			 * 关于端口重用和地址重用部分的检测规则，在inet_csk_bind_conflict
+			 * 函数中有详细的介绍。
+			 */
 			if (sk->sk_reuse == SK_FORCE_REUSE ||
 			    (tb->fastreuse > 0 && reuse) ||
 			    sk_reuseport_match(tb, sk))
@@ -563,6 +609,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		}
 
 		if (check_bind_conflict && inet_use_bhash2_on_bind(sk)) {
+			/* 进行完整的端口冲突检测。 */
 			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, true, true))
 				goto fail_unlock;
 		}
@@ -582,13 +629,16 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	}
 
 	if (!found_port && check_bind_conflict) {
+		/* 进行完整的端口冲突检测。 */
 		if (inet_csk_bind_conflict(sk, tb, tb2, true, true))
 			goto fail_unlock;
 	}
 
 success:
-	inet_csk_update_fastreuse(sk, tb, tb2);
+		/* 根据sk属性更新tb上的快速重用信息。 */
+		inet_csk_update_fastreuse(sk, tb, tb2);
 
+		/* 如果这个套接口没有被绑定到tb->woner上，就将其绑定 */
 	if (!inet_csk(sk)->icsk_bind_hash)
 		inet_bind_hash(sk, tb, tb2, port);
 	WARN_ON(inet_csk(sk)->icsk_bind_hash != tb);
@@ -1343,6 +1393,15 @@ int inet_csk_listen_start(struct sock *sk)
 	if (unlikely(err))
 		return err;
 
+	/**
+	 * TCP调用listen系统调用的处理函数。这里可以看出，listen的时候会
+	 * 再次调用sk_prot->get_port进行端口冲突检查以及绑定。
+	 *
+	 * 这是因为，listen之前可能没有调用bind，此时这里的作用就是随机分
+	 * 配一个监听端口。如果之前已经进行过bind，那么这里相当于在此检查
+	 * 有没有冲突，防止竟态问题。
+	 */
+
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);
 
 	sk->sk_ack_backlog = 0;
@@ -1359,6 +1418,10 @@ int inet_csk_listen_start(struct sock *sk)
 		inet->inet_sport = htons(inet->inet_num);
 
 		sk_dst_reset(sk);
+		/* 
+		 * 调用inet_hash，将套接口放到哈希表，开始监听。对于端口重用
+		 * 的情况，这里还会进行reuseport相关数据的更新以及冲突的检测。
+		 */
 		err = sk->sk_prot->hash(sk);
 
 		if (likely(!err))

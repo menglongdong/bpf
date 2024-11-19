@@ -469,12 +469,15 @@ EXPORT_SYMBOL_GPL(tcp_slow_start);
  */
 __bpf_kfunc void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w, u32 acked)
 {
-	/* If credits accumulated at a higher w, apply them gently now. */
+	/*
+	 * 标准的拥塞避免算法：拥塞窗口内的报文量被确认后，将拥塞窗口+1
+	 */
 	if (tp->snd_cwnd_cnt >= w) {
 		tp->snd_cwnd_cnt = 0;
 		tcp_snd_cwnd_set(tp, tcp_snd_cwnd(tp) + 1);
 	}
 
+	/* 对snd_cwnd_cnt进行累加统计。 */
 	tp->snd_cwnd_cnt += acked;
 	if (tp->snd_cwnd_cnt >= w) {
 		u32 delta = tp->snd_cwnd_cnt / w;
@@ -497,10 +500,15 @@ __bpf_kfunc void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	/*
+	 * 传统的拥塞避免（拥塞增长）算法，在网络拥塞处于Open状态时被调用。
+	 * 如果cwnd没有限制到报文的发送，那么不进行拥塞窗口的扩充。
+	 */
+
 	if (!tcp_is_cwnd_limited(sk))
 		return;
 
-	/* In "safe" area, increase. */
+	/* 慢启动阶段，使用慢启动算法来增长窗口。 */
 	if (tcp_in_slow_start(tp)) {
 		acked = tcp_slow_start(tp, acked);
 		if (!acked)

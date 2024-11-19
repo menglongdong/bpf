@@ -2304,6 +2304,11 @@ static u32 tcp_cwnd_test(const struct tcp_sock *tp)
 {
 	u32 in_flight, cwnd, halfcwnd;
 
+	/*
+	 * 用于拥塞窗口是否能够继续发送当前skb的检测，在tcp_write_xmit中被调用。
+	 * 该函数返回拥塞窗口允许发送多少个报文出去。
+	 */
+
 	in_flight = tcp_packets_in_flight(tp);
 	cwnd = tcp_snd_cwnd(tp);
 	if (in_flight >= cwnd)
@@ -2385,6 +2390,15 @@ static int tso_fragment(struct sock *sk, struct sk_buff *skb, unsigned int len,
 
 	/* All of a TSO frame must be composed of paged data.  */
 	DEBUG_NET_WARN_ON_ONCE(skb->len != skb->data_len);
+
+	/* 
+	 * 下面的代码会将skb按照长度len拆分成两个skb，然后把新创建的skb插入到
+	 * 发送队列中。
+	 * 
+	 * 整个函数的作用就是将skb的长度缩短到len，以便于后面的发送。注意：这个
+	 * 过程不产生内存拷贝，完全是基于page_frag来进行操作的。这个过程中，两个
+	 * skb使用的page_frag可能会指向相同的page。
+	 */
 
 	buff = tcp_stream_alloc_skb(sk, gfp, true);
 	if (unlikely(!buff))
@@ -2973,6 +2987,12 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	int result;
 	bool is_cwnd_limited = false, is_rwnd_limited = false;
 
+	/* 
+	 * 进行TCP报文的发送。如果push_one置位了，那么最多发送一个报文。如果push_one
+	 * 等于2，那么强制发送一个报文，而不考虑拥塞控制的问题。这在某些拥塞算法中有用，
+	 * 比如FRTO算法会强制从write_queue中发送一个报文出去。
+	 */
+
 	sent_pkts = 0;
 
 	tcp_mstamp_refresh(tp);
@@ -2982,7 +3002,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		mss_now = tcp_current_mss(sk);
 
 	if (!push_one) {
-		/* Do MTU probing. */
+		/* 如果不是只发送一个，那么进行MTU探测。返回值为0代表拥塞窗口
+		 * 不允许探测，需要等待。
+		 */
 		result = tcp_mtu_probe(sk);
 		if (!result) {
 			return false;
@@ -2991,6 +3013,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		}
 	}
 
+	/* 计算一个skb最多可以包含多少个段，即：GSO最大尺寸/MSS */
 	max_segs = tcp_tso_segs(sk, mss_now);
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
@@ -3008,6 +3031,12 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (tcp_pacing_check(sk))
 			break;
 
+		/* 
+		 * 进行拥塞窗口测试，测试当前报文是否能够发送出去，即在外数据+当前报文
+		 * 有没有超过cwnd。
+		 * 如果拥塞窗口满了，但是push_one==2，那么仍然允许发送出去一个报文。
+		 * cwnd_quota为允许发送的报文数量。
+		 */
 		cwnd_quota = tcp_cwnd_test(tp);
 		if (!cwnd_quota) {
 			if (push_one == 2)
@@ -3021,13 +3050,19 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (missing_bytes > 0)
 			tcp_grow_skb(sk, skb, missing_bytes);
 
+		/* 
+		 * 初始化并获取skb中的段数，即：skb->len / MSS。当段数为1的时候
+		 * 代表当前
+		 */
 		tso_segs = tcp_set_skb_tso_segs(skb, mss_now);
 
+		/* 检查skb中的第一个段是否在发送窗口内（不是拥塞窗口） */
 		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now))) {
 			is_rwnd_limited = true;
 			break;
 		}
 
+		/* 下面部分是Nagle算法的检查，判断是否需要延迟发送。 */
 		if (tso_segs == 1) {
 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
 						     (tcp_skb_is_last(sk, skb) ?
@@ -3041,11 +3076,18 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		}
 
 		limit = mss_now;
+		/* 如果tso_segs大于1，那么调用tcp_mss_split_point来获取当前可以
+		 * 立即发送出去的那部分数据。如果skb包含多个段，那么可能只有部分能够
+		 * 现在发送出去。
+		 */
 		if (tso_segs > 1 && !tcp_urg_mode(tp))
 			limit = tcp_mss_split_point(sk, skb, mss_now,
 						    cwnd_quota,
 						    nonagle);
 
+		/* 如果限制能够发送出去的报文长度比skb->len小，那么对当前报文进行
+		 * 拆分。
+		 */
 		if (skb->len > limit &&
 		    unlikely(tso_fragment(sk, skb, limit, mss_now, gfp)))
 			break;
@@ -3061,6 +3103,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (TCP_SKB_CB(skb)->end_seq == TCP_SKB_CB(skb)->seq)
 			break;
 
+		/* 进行报文数据的发送 */
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
 
@@ -3733,6 +3776,14 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 	u32 max_segs;
 	int mib_idx;
 
+	/*
+	 * 进行报文的重传，如果在外数据为0，那么不需要重传。该函数会在条件允许的情况下，对
+	 * 重传队列中所有的被标记为LOST且没有重传过的报文进行重传。
+	 *
+	 * 由于重传的报文数量受拥塞窗口的限制，因此这里的重传过程实质上是之前前面拥塞控制
+	 * 阶段就已经决定了要重传多少报文的，一直重传到拥塞窗口等于在外数据。
+	 */
+
 	if (!tp->packets_out)
 		return;
 
@@ -3750,6 +3801,7 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 		if (!hole)
 			tp->retransmit_skb_hint = skb;
 
+		/* 在传数据比拥塞窗口大，那么将不进行重传。*/
 		segs = tcp_snd_cwnd(tp) - tcp_packets_in_flight(tp);
 		if (segs <= 0)
 			break;
@@ -3759,34 +3811,57 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 		 */
 		segs = min_t(int, segs, max_segs);
 
+		/* 重传未被确认的数据比被标记为lost的数据多，那么不进行重传。*/
 		if (tp->retrans_out >= tp->lost_out) {
 			break;
 		} else if (!(sacked & TCPCB_LOST)) {
+			/*
+			 * 如果当前skb没有被标记为LOST，那么将跳过这个skb。
+			 * 如果skb没有被重传过，而且没有被sack确认过，那么
+			 * 认为它是一个空洞。
+			 *
+			 * 第一个空洞skb将会被设置为retransmit_skb_hint，
+			 * 用于快速找到重传链表中第一个需要被重传的报文。
+			 */
 			if (!hole && !(sacked & (TCPCB_SACKED_RETRANS|TCPCB_SACKED_ACKED)))
 				hole = skb;
 			continue;
 
 		} else {
+			/* 如果当前是LOSS状态，那么更新慢启动重传计数；
+			 * 否则，更新快速重传计数。
+			 */
 			if (icsk->icsk_ca_state != TCP_CA_Loss)
 				mib_idx = LINUX_MIB_TCPFASTRETRANS;
 			else
 				mib_idx = LINUX_MIB_TCPSLOWSTARTRETRANS;
 		}
 
+		/* 不会重传一个被标记为sacked或者重传过的报文。*/
 		if (sacked & (TCPCB_SACKED_ACKED|TCPCB_SACKED_RETRANS))
 			continue;
 
+		/* 内存限制检查。*/
 		if (tcp_small_queue_check(sk, skb, 1))
 			break;
 
+		/*
+		 * 进行报文数据的重传，其中会做各种合法性检查。重传成功后，会将报文标记为
+		 * 重传，同时更新重传计数。
+		 */
 		if (tcp_retransmit_skb(sk, skb, segs))
 			break;
 
 		NET_ADD_STATS(sock_net(sk), mib_idx, tcp_skb_pcount(skb));
 
+		/*
+		 * 如果当前处于拥塞缩减状态（CWR或者recovery），那么更新prr_out统计
+		 * （在拥塞缩减期间发送的报文量）。
+		 */
 		if (tcp_in_cwnd_reduction(sk))
 			tp->prr_out += tcp_skb_pcount(skb);
 
+		/* 刷新重传定时器（一次重传只需要刷新一次）。 */
 		if (skb == rtx_head &&
 		    icsk->icsk_pending != ICSK_TIME_REO_TIMEOUT)
 			rearm_timer = true;
@@ -4298,6 +4373,11 @@ int tcp_connect(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *buff;
 	int err;
+
+	/* 
+	 * 进行SYN报文的创建和发送。对于fastopen的情况，这里会检查其cookie是否有效，
+	 * 有效的话，会将fastopen_req中的data一起构建到syn报文里进行发送。
+	 */
 
 	tcp_call_bpf(sk, BPF_SOCK_OPS_TCP_CONNECT_CB, 0, NULL);
 

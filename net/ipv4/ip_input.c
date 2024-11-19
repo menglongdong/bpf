@@ -212,6 +212,11 @@ resubmit:
 		}
 		__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
 	} else {
+		/* 
+		 * 对于找不到协议来处理的报文，如果raw套接口对其进行处理
+		 * 了，那么不做额外的处理。否则，发送一条异常ICMP报文给
+		 * 发送方。
+		 */
 		if (!raw) {
 			if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 				__IP_INC_STATS(net, IPSTATS_MIB_INUNKNOWNPROTOS);
@@ -570,10 +575,12 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt,
 {
 	struct net *net = dev_net(dev);
 
+	/* skb主要的校验函数，包括丢弃非发往本机的数据包（混杂模式）、IP报头校验等 */
 	skb = ip_rcv_core(skb, net);
 	if (skb == NULL)
 		return NET_RX_DROP;
 
+	/* 调用防火墙的钩子，在通过防火墙规则后将报文传递给ip_rcv_finish函数 */
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,
 		       ip_rcv_finish);

@@ -7,6 +7,27 @@
  *              - Ingress support
  */
 
+/**
+ * 从内核里来看，每个排队队列都至少包含一个类和一个分类器，其中每个类至少被
+ * 绑定到一个分类器上，分类器负责将报文投放到对应的类中，多个分类器可以对应
+ * 一个类。
+ *
+ * 每个类又可以对应一个排队队列，通过这种方式，一个网卡上可以绑定多个排队
+ * 队列，他们以树状结构组织起来。
+ *
+ * 从用户的角度来看，排队队列分为有类和无类队列。很明显，无类队列就是不可以
+ * 包含类的队列，更直观的说，它不可以再有子排队队列。
+ *
+ * 无类队列一般针对的是整个网卡的流量控制，即其不区分各种场景，而是简单地
+ * 对网卡上的报文进行流量限制、重新编排等操作，常见的无类队列有pfifi_fast
+ * （先进先出）、TBF（令牌桶）、SFQ（随机公平队列）等。例如，pfifo根据优先
+ * 级来对报文进行管理，维护了个优先级数组，优先将高优先级的报文发送出去。
+ *
+ * 有类队列能够实现的功能就比较丰富了，它可以根据不同的场景、不同的报文类型
+ * （如IP、端口等）对报文进行分类处理。
+ * 
+ */
+
 #include <linux/bitops.h>
 #include <linux/module.h>
 #include <linux/types.h>
@@ -417,6 +438,7 @@ void __qdisc_run(struct Qdisc *q)
 	int quota = READ_ONCE(net_hotdata.dev_tx_weight);
 	int packets;
 
+	/* 循环从Qdisc中取包并发送，直到队列空或达到本轮配额。 */
 	while (qdisc_restart(q, &packets, quota)) {
 		quota -= packets;
 		if (quota <= 0) {
@@ -502,6 +524,8 @@ static void dev_watchdog(struct timer_list *t)
 	struct net_device *dev = timer_container_of(dev, t, watchdog_timer);
 	bool release = true;
 
+	/* 网口的发送队列超时，触发了看门狗，这里是看门狗的处理流程。 */
+
 	spin_lock(&dev->tx_global_lock);
 	if (!qdisc_tx_is_noop(dev)) {
 		if (netif_device_present(dev) &&
@@ -557,6 +581,7 @@ static void dev_watchdog(struct timer_list *t)
 
 void netdev_watchdog_up(struct net_device *dev)
 {
+	/* 开启看门狗定时器（如果有处理函数的话），默认为5赫兹 */
 	if (!dev->netdev_ops->ndo_tx_timeout)
 		return;
 	if (dev->watchdog_timeo <= 0)

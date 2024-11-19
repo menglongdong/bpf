@@ -87,7 +87,9 @@ struct inet_bind_bucket {
 	__be32			fast_rcv_saddr;
 	unsigned short		fast_sk_family;
 	bool			fast_ipv6_only;
+	/* 使用node将该bucket添加到hash表中 */
 	struct hlist_node	node;
+	/* owner代表所有绑定了该端口的sock，通过hash组织起来，使用了sock->sk_bind_node */
 	struct hlist_head	bhash2;
 	struct rcu_head		rcu;
 };
@@ -144,6 +146,9 @@ struct inet_listen_hashbucket {
 /* This is for listening sockets, thus all sockets which possess wildcards. */
 #define INET_LHTABLE_SIZE	32	/* Yes, really, this is all you need. */
 
+/**
+ * 这个结构体用于保存协议相关的所有hash表，包括listen表、bind表、建链表等。
+ */
 struct inet_hashinfo {
 	/* This is for sockets with full identity only.  Sockets here will
 	 * always be without wildcards and will have the following invariant:
@@ -151,16 +156,19 @@ struct inet_hashinfo {
 	 *          TCP_ESTABLISHED <= sk->sk_state < TCP_CLOSE
 	 *
 	 */
+	/*
+	 * 已连接的套接口的hash表，这里的套接口都是经过精确的套接口属性散列到这个
+	 * hash表里的。该hash中保存了连接、半连接、半关闭状态下的套接口，也就是
+	 * 除了listen和close状态下的，都在这里面了。
+	 */
 	struct inet_ehash_bucket	*ehash;
 	spinlock_t			*ehash_locks;
 	unsigned int			ehash_mask;
 	unsigned int			ehash_locks_mask;
 
-	/* Ok, let's try this, I give up, we do need a local binding
-	 * TCP hash as well as the others for fast bind/connect.
-	 */
+	/* 用来分配inet_bind_bucket的缓存 */
 	struct kmem_cache		*bind_bucket_cachep;
-	/* This bind table is hashed by local port */
+	/* 端口绑定的HASH表，通过本地端口来进行哈希 */
 	struct inet_bind_hashbucket	*bhash;
 	struct kmem_cache		*bind2_bucket_cachep;
 	/* This bind table is hashed by local port and sk->sk_rcv_saddr (ipv4)
@@ -170,9 +178,18 @@ struct inet_hashinfo {
 	struct inet_bind_hashbucket	*bhash2;
 	unsigned int			bhash_size;
 
-	/* The 2nd listener table hashed by local port and address */
+	/*
+	 * 所有处于listen状态的hash表，通过sk->icsk_listen_portaddr_node链接。
+	 * 该hash表是通过源地址和端口来进行hash的。
+	 */
 	unsigned int			lhash2_mask;
 	struct inet_listen_hashbucket	*lhash2;
+
+	/* 这个hash表存放的是所有listen状态的套接口，通过sk->sk_node来链接。
+	 * 该hash是根据源端口来进行hash的。
+	 *
+	 * 这里原本有个listening哈希表的，不知道为啥删除了？
+	 */
 
 	bool				pernet;
 } ____cacheline_aligned_in_smp;
@@ -243,6 +260,8 @@ bool inet_bind2_bucket_match_addr_any(const struct inet_bind2_bucket *tb,
 				      const struct net *net, unsigned short port,
 				      int l3mdev, const struct sock *sk);
 
+
+/* 根据端口号和网络命名空间计算本地绑定端口的hash号 */
 static inline u32 inet_bhashfn(const struct net *net, const __u16 lport,
 			       const u32 bhash_size)
 {
@@ -340,6 +359,7 @@ static inline struct sock *inet_lookup_listener(struct net *net,
 				   ((__force __u64)(__be32)(__saddr)))
 #endif /* __BIG_ENDIAN */
 
+/* 对比sk的命名空间、地址、端口以及网口等信息是否与提供的匹配 */
 static inline bool inet_match(const struct net *net, const struct sock *sk,
 			      const __addrpair cookie, const __portpair ports,
 			      int dif, int sdif)
@@ -402,12 +422,14 @@ static inline struct sock *__inet_lookup(struct net *net,
 	u16 hnum = ntohs(dport);
 	struct sock *sk;
 
+	/* 对于已建链sock，直接在established哈希中进行精确匹配。 */
 	sk = __inet_lookup_established(net, saddr, sport,
 				       daddr, hnum, dif, sdif);
 	*refcounted = true;
 	if (sk)
 		return sk;
 	*refcounted = false;
+	/* 从listener哈希中选取匹配度最高的监听套接字。 */
 	return __inet_lookup_listener(net, skb, doff, saddr,
 				      sport, daddr, hnum, dif, sdif);
 }

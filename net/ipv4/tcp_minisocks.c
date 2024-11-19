@@ -109,6 +109,9 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 	bool paws_reject = false;
 	int ts_recent_stamp;
 
+	/*
+	 * 处理TIME_WAIT状态时收到报文的逻辑。真正子状态可能是FIN2或TIME_WAIT。
+	 */
 	/* Instead of dropping immediately, wait to see what value is
 	 * returned. We will accept a non psp-encapsulated syn in the
 	 * case where TCP_TW_SYN is returned.
@@ -129,6 +132,16 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 		}
 	}
 
+	/*
+	 * 在处于FIN_WAIT2时，存在以下处理逻辑：
+	 * - 收到新数据：返回RST，因为当前是TW套接口，说明已经全关闭，
+	 *   这种状态下不允许接收新数据；
+	 * - 收到好的SYN：发送RST并立刻释放当前套接口，作为异常数据处理，这里可以看出
+	 *   这种状态下，不能新建连接；
+	 * - 收到重复ack报文：不做处理；
+	 * - 收到FIN报文：切换到TIME_WAIT状态并发送ACK报文；
+	 * - 其他情况下，重置套接口。
+	 */
 	if (READ_ONCE(tw->tw_substate) == TCP_FIN_WAIT2) {
 		/* Just repeat all the checks of tcp_rcv_state_process() */
 
@@ -183,30 +196,22 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 		return TCP_TW_ACK;
 	}
 
-	/*
-	 *	Now real TIME-WAIT state.
-	 *
-	 *	RFC 1122:
-	 *	"When a connection is [...] on TIME-WAIT state [...]
-	 *	[a TCP] MAY accept a new SYN from the remote TCP to
-	 *	reopen the connection directly, if it:
-	 *
-	 *	(1)  assigns its initial sequence number for the new
-	 *	connection to be larger than the largest sequence
-	 *	number it used on the previous connection incarnation,
-	 *	and
-	 *
-	 *	(2)  returns to TIME-WAIT state if the SYN turns out
-	 *	to be an old duplicate".
-	 */
 
+	/*
+	 * 在处于TIME_WAIT状态时，存在以下处理逻辑：
+	 * - 收到好的SYN：从listen状态下的套接口进行匹配，找到的话，立马释放当前套接口，
+	 *   并用listen状态的套接口来处理报文；
+	 *
+	 * 半连接下收到RST报文或者异常报文（SYN回绕等）的话，会立马释放当前套接口。
+	 */
 	if (!paws_reject &&
 	    (TCP_SKB_CB(skb)->seq == rcv_nxt &&
 	     (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq || th->rst))) {
 		/* In window segment, it may be only reset or bare ack. */
 
-		if (psp_drop)
-			goto out_put;
+			/* ACK报文或者RST报文时，先检查PSP策略。 */
+			if (psp_drop)
+				goto out_put;
 
 		if (th->rst) {
 			/* This is TIME_WAIT assassination, in two flavors.
@@ -233,23 +238,11 @@ kill:
 		return TCP_TW_SUCCESS;
 	}
 
-	/* Out of window segment.
 
-	   All the segments are ACKed immediately.
-
-	   The only exception is new SYN. We accept it, if it is
-	   not old duplicate and we are not in danger to be killed
-	   by delayed old duplicates. RFC check is that it has
-	   newer sequence number works at rates <40Mbit/sec.
-	   However, if paws works, it is reliable AND even more,
-	   we even may relax silly seq space cutoff.
-
-	   RED-PEN: we violate main RFC requirement, if this SYN will appear
-	   old duplicate (i.e. we receive RST in reply to SYN-ACK),
-	   we must return socket to time-wait state. It is not good,
-	   but not fatal yet.
+	/**
+	 * 在处于TIME_WAIT状态下，如果接收到了syn报文，那么就进行新连接的建立。
+	 * tcp_tw_isn用于标识本次是基于TW的建链，这种建链不能使用cookie模式。
 	 */
-
 	if (th->syn && !th->rst && !th->ack && !paws_reject &&
 	    (after(TCP_SKB_CB(skb)->seq, rcv_nxt) ||
 	     (tmp_opt.saw_tstamp &&
@@ -332,6 +325,10 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 	struct inet_timewait_sock *tw;
 
 	tw = inet_twsk_alloc(sk, &net->ipv4.tcp_death_row, state);
+
+	/* 该函数从当前sk创建一个TW套接口，并且释放当前sk，使其进入close状态
+	 * 并随后释放。
+	 */
 
 	if (tw) {
 		struct tcp_timewait_sock *tcptw = tcp_twsk((struct sock *)tw);

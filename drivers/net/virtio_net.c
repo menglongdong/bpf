@@ -3332,6 +3332,16 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 	bool use_napi = sq->napi.weight;
 	bool kick;
 
+	/* 
+	 * virtio_net中的发包函数。该函数会调用xmit_skb来进行报文的发送。
+	 * 在xmit_skb中，会根据skb来封装对应的entry，并将数据填充到virtqueue
+	 * 中，随后会发送通知给qemu用户态线程来将队列中的报文取走（一般是取出
+	 * 报文后，传递给TAP设备）。
+	 * 
+	 * 完成这一过程后，这里会对vq的状态进行检查，确定其是否还有足够的空间。
+	 * 如果空间不足的话，就会调整网口的状态。
+	 */
+
 	if (!use_napi)
 		free_old_xmit(sq, txq, false);
 	else
@@ -6193,6 +6203,7 @@ static void virtnet_free_irq_moder(struct virtnet_info *vi)
 	rtnl_unlock();
 }
 
+/* virtio_net类型的网口的处理函数。 */
 static const struct net_device_ops virtnet_netdev = {
 	.ndo_open            = virtnet_open,
 	.ndo_stop   	     = virtnet_close,
@@ -6703,6 +6714,9 @@ static const struct xdp_metadata_ops virtnet_xdp_metadata_ops = {
 	.xmo_rx_hash			= virtnet_xdp_rx_hash,
 };
 
+/* virtio_net网卡d驱动的探测函数，该函数用于探测当前系统中的PCI设备，并创建
+ * 对应的网口设备。
+ */
 static int virtnet_probe(struct virtio_device *vdev)
 {
 	int i, err = -ENOMEM;

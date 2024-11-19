@@ -614,6 +614,21 @@ tcp_in_window(struct nf_conn *ct, enum ip_conntrack_dir dir,
 		 */
 		seq = end = sender->td_end;
 
+	/* 
+	 * 检查当前报文的seq和ack是否合法。这个可以根据ip_ct_tcp_state来判断。
+	 * 主要检查的项目包括：
+	 * - 报文序列号是否在窗口内，即 seq < sender->td_maxend + 1,
+	 *   end > sender->td_end - receiver->td_maxwin - 1.
+	 *   也就是说，报文的开始序列号要小于接收端收包窗口的右边界，截止序列号
+	 *   要大于收包窗口的左边界。
+	 * 
+	 * - 报文的ack号是否在窗口内，即 ack < receiver->td_end + 1,
+	 *   ack > receiver->td_end - MAXACKWINDOW(sender) - 1
+	 *   也就是说， ack号要小于对端发送的最后一个字节（即不能ack对方还没有
+	 *   发送的数据，这是合理的），同时要大于本端收包窗口的左边界，即不能
+	 *   ack已经被ack过的报文。
+	 */
+
 	seq_ok = before(seq, sender->td_maxend + 1);
 	if (!seq_ok) {
 		u32 overshot = end - sender->td_maxend + 1;
@@ -637,6 +652,7 @@ tcp_in_window(struct nf_conn *ct, enum ip_conntrack_dir dir,
 			 * Thus if only the sequence check fails then do update td_end so
 			 * possible ACK for this data can update internal state.
 			 */
+			/* 更新发送端的td_end，即发送出去的最后一个字节 */
 			sender->td_end = end;
 			sender->flags |= IP_CT_TCP_FLAG_DATA_UNACKNOWLEDGED;
 
@@ -679,6 +695,7 @@ tcp_in_window(struct nf_conn *ct, enum ip_conntrack_dir dir,
 		sender->flags |= IP_CT_TCP_FLAG_DATA_UNACKNOWLEDGED;
 	}
 	if (tcph->ack) {
+		/* 更新发送端的td_maxack */
 		if (!(sender->flags & IP_CT_TCP_FLAG_MAXACK_SET)) {
 			sender->td_maxack = ack;
 			sender->flags |= IP_CT_TCP_FLAG_MAXACK_SET;
@@ -690,6 +707,7 @@ tcp_in_window(struct nf_conn *ct, enum ip_conntrack_dir dir,
 	/* Update receiver data. */
 	if (receiver->td_maxwin != 0 && after(end, sender->td_maxend))
 		receiver->td_maxwin += end - sender->td_maxend;
+	/* 更新接收端的td_maxend，即最后一个被确认的数据+window */
 	if (after(sack + win, receiver->td_maxend - 1)) {
 		receiver->td_maxend = sack + win;
 		if (win == 0)

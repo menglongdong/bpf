@@ -5,6 +5,15 @@
  * Authors:	Thomas Graf <tgraf@suug.ch>
  */
 
+/* 
+ * 该功能用于给报文设置优先级的，即会将该cgroup内的所有任务的所有套接口的prioidx
+ * 都设置为当前的css，其中css中维护了一个map（准确的说是网口上维护了个map），存储
+ * 着每个网口的优先级。
+ * 
+ * 当报文到达链路层的时候，会取出sock上的css，并取出当前网口的优先级，设置到报文
+ * 上面。设置好了之后，会将报文传递给TC模块进行流量限制。
+ */
+
 #include <linux/slab.h>
 #include <linux/cgroup.h>
 #include <linux/fdtable.h>

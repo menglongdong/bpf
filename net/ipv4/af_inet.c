@@ -508,6 +508,10 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 
 	snum = ntohs(addr->sin_port);
 	err = -EACCES;
+	/* 
+	 * 端口权限检查，对于没有CAP_NET_BIND_SERVICE权限的用户禁止绑定低端口
+	 * （小于1024的端口，可通过sysctl_ip_prot_sock配置）
+	 */
 	if (!(flags & BIND_NO_CAP_NET_BIND_SERVICE) &&
 	    snum && inet_port_requires_bind_service(net, snum) &&
 	    !ns_capable(net->user_ns, CAP_NET_BIND_SERVICE))
@@ -523,7 +527,7 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 	if (flags & BIND_WITH_LOCK)
 		lock_sock(sk);
 
-	/* Check these errors (active socket, double bind). */
+	/* 不能重复进行绑定操作 */
 	err = -EINVAL;
 	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
@@ -532,7 +536,11 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
 
-	/* Make sure we are allowed to bind here. */
+	/* 
+	 * 如果指定了端口（绑定特定的端口）或者未指定（随机分配）并且没有启用
+	 * bind_address_no_port选项，那么调用当前协议的get_port方法进行
+	 * 端口的绑定操作。对于TCP协议，此处为inet_csk_get_port()。
+	 */
 	if (snum || !(inet_test_bit(BIND_ADDRESS_NO_PORT, sk) ||
 		      (flags & BIND_FORCE_ADDRESS_NO_PORT))) {
 		err = sk->sk_prot->get_port(sk, snum);
@@ -541,8 +549,18 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 			goto out_release_sock;
 		}
 		if (!(flags & BIND_FROM_BPF)) {
+			/* 这里调用eBPF程序来判断当前端口和地址是否可以被
+			 * 使用。注意，这里的eBPF程序只是决定了inet_sport
+			 * 是否生效，无论如何当前端口都已经被绑定并使用了
+			 * 的，其他人尝试绑定会失败。
+			 */
 			err = BPF_CGROUP_RUN_PROG_INET4_POST_BIND(sk);
 			if (err) {
+				/* 
+				 * 注意：这里会取消对地址的绑定，但是端口还是
+				 * 绑定成功了。所以如果这里的绑定没有指定地址
+				 * 那么是可以正常工作的。
+				 */
 				inet->inet_saddr = inet->inet_rcv_saddr = 0;
 				if (sk->sk_prot->put_port)
 					sk->sk_prot->put_port(sk);
@@ -551,6 +569,9 @@ int __inet_bind(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len,
 		}
 	}
 
+	/* 如果指定了端口或者地址进行的绑定，那么这里会设置上标志位，代表是主动
+	 * 绑定的。
+	 */
 	if (inet->inet_rcv_saddr)
 		sk->sk_userlocks |= SOCK_BINDADDR_LOCK;
 	if (snum)
@@ -583,14 +604,27 @@ int inet_dgram_connect(struct socket *sock, struct sockaddr_unsized *uaddr,
 	if (uaddr->sa_family == AF_UNSPEC)
 		return prot->disconnect(sk, flags);
 
+	/* UDP套接口可以多次connect，但是只能绑定一次（地址和端口）。在下一次
+	 * connect的时候，sa_family指定成AF_UNSPEC具有disconnect的效果。
+	 */
+
 	if (BPF_CGROUP_PRE_CONNECT_ENABLED(sk)) {
 		err = prot->pre_connect(sk, uaddr, addr_len);
 		if (err)
 			return err;
 	}
 
+	/* 对于没有绑定本地端口的UDP套接口，在进行connect的时候会自动绑定端口。
+	 * inet_autobind()就是干这个事的。
+	 */
 	if (data_race(!inet_sk(sk)->inet_num) && inet_autobind(sk))
 		return -EAGAIN;
+	/*
+	 * 对于UDP套接口，随后会调用ip4_datagram_connect来进行连接的建立。
+	 *
+	 * 注意，如果当前套接口没有绑定地址，那么在connect的时候会进行路由
+	 * 查找，根据路由来选出源地址，并进行绑定。
+	 */
 	return prot->connect(sk, uaddr, addr_len);
 }
 EXPORT_SYMBOL(inet_dgram_connect);
@@ -602,10 +636,9 @@ static long inet_wait_for_connect(struct sock *sk, long timeo, int writebias)
 	add_wait_queue(sk_sleep(sk), &wait);
 	sk->sk_write_pending += writebias;
 
-	/* Basic assumption: if someone sets sk->sk_err, he _must_
-	 * change state of the socket from TCP_SYN_*.
-	 * Connect() does not allow to get error notifications
-	 * without closing the socket.
+	/** 
+	 * 在当前套接口上进行等待，直到其超时，或者状态变为非SYN_SEND和SYN_RECV。
+	 * 这里他的状态是有可能变成SYN_RECV的，对于“同时打开”的场景
 	 */
 	while ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		release_sock(sk);
@@ -1155,8 +1188,10 @@ static const struct net_proto_family inet_family_ops = {
 	.owner	= THIS_MODULE,
 };
 
-/* Upon startup we insert all the elements in inetsw_array[] into
- * the linked list inetsw.
+/* 
+ * IP协议族中所有的四层协议，这里定义的inet_protosw是针对socket的，即用来创建套接口
+ * 以及与用户交互的，面向上层。其中，ops为当前面向socket的操作函数，prot为面向sock
+ * 的协议操作函数以及协议参数。
  */
 static struct inet_protosw inetsw_array[] =
 {

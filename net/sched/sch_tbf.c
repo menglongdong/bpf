@@ -95,13 +95,28 @@
 	changed the limit is not effective anymore.
 */
 
+/* 
+ * TBF（Token Bucket Filter），令牌桶过滤器，即基于令牌桶的排队队列，可以实现较好
+ * 的流量控制（限速）的目的。
+ * 
+ * Linux采用了双桶双速率模式的令牌桶来进行网速控制，即存在C桶和P桶，以两个不同的速率
+ * 往两个桶里投放令牌。在将报文从队列中取出来的时候（dequeue操作），会进行令牌的检查
+ * 和更新，如果令牌不够，那么不返回报文。
+ * 
+ * 其中，P桶是为了限制峰值速率的，P桶的速率一般限制为MTU（还没搞清楚场景）。
+ */
+
 struct tbf_sched_data {
 /* Parameters */
 	u32		limit;		/* Maximal length of backlog: bytes */
 	u32		max_size;
+	/* 桶的深度 */
 	s64		buffer;		/* Token bucket depth/rate: MUST BE >= MTU/B */
+	/* P桶的深度，一般比较小，用于限制峰值带宽 */
 	s64		mtu;
+	/* 令牌的速率 */
 	struct psched_ratecfg rate;
+	/* 峰值令牌的速率 */
 	struct psched_ratecfg peak;
 
 /* Variables */

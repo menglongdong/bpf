@@ -343,6 +343,11 @@ static rx_handler_result_t br_handle_frame(struct sk_buff **pskb)
 	struct sk_buff *skb = *pskb;
 	const unsigned char *dest = eth_hdr(skb)->h_dest;
 
+	/*
+	 * 网桥的处理函数，即注册在网口上的handle函数，网口收到报文后会交给该
+	 * 函数进行处理。
+	 */
+
 	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
 		return RX_HANDLER_PASS;
 

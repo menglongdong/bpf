@@ -174,6 +174,18 @@ struct fastopen_queue {
  * @rskq_defer_accept - User waits for some data after accept()
  *
  */
+
+/**
+ * 这个结构体表示一个队列，里面存放了处于syn_recv和已连接但是还没有
+ * 被accept的状态的套接口链表。
+ * 
+ * 该结构以单向链表的方式来组织request_sock，其中rskq_accept_head
+ * 为链表头部，rskq_accept_tail为链表尾部，其指向已连接但是还没有
+ * 被accept的套接口，其长度保存在listen_sock的sk_ack_backlog中。
+ * 对于syn_recv状态的套接口，其长度保存在qlen中，而套接口保存在
+ * 一个协议相关的hash表中。其中，young保存的是未超时发送过syn+ack
+ * 报文的连接套接字。
+ */
 struct request_sock_queue {
 	spinlock_t		rskq_lock;
 	u8			rskq_defer_accept;

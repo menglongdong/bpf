@@ -6,10 +6,18 @@
 
 
 struct ip_ct_tcp_state {
+	/* 发送出去的最后一个字节，即当前已经发送出去的最大序列号 */
 	u_int32_t	td_end;		/* max of seq + len */
+	/* 
+	 * 允许发送的最大的报文序列号，即对方的收包窗口的上限值。
+	 * 这个是根据收到的ack号+window来确定的。
+	 */
 	u_int32_t	td_maxend;	/* max of ack + max(win, 1) */
+	/* 本端的最大收包窗口大小。 */
 	u_int32_t	td_maxwin;	/* max(win) */
+	/* 作为发送端，发送出去的最大的ack号 */
 	u_int32_t	td_maxack;	/* max of ack */
+	/* 本端的窗口缩放因子 */
 	u_int8_t	td_scale;	/* window scale factor */
 	u_int8_t	flags;		/* per direction options */
 };

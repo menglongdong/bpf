@@ -95,7 +95,11 @@ struct udp_hslot_main {
  *	@log:	log2(number of slots in hash table)
  */
 struct udp_table {
+	/* UDP套接口根据本地端口进行HASH的表。这个HASH表主要用用来遍历的，
+	 * 比如通过proc打印所有的UDP套接口等。
+	 */
 	struct udp_hslot	*hash;
+	/* UDP套接口，根据本地地址和端口来哈希的 */
 	struct udp_hslot_main	*hash2;
 #if !IS_ENABLED(CONFIG_BASE_SMALL)
 	struct udp_hslot	*hash4;

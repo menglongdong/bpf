@@ -244,6 +244,11 @@ int udp_lib_get_port(struct sock *sk, unsigned short snum,
 	struct net *net = sock_net(sk);
 	int error = -EADDRINUSE;
 
+	/* 给UDP套接口绑定端口（随机或者主动）。这里是唯一的将套接口加入到UDP
+	 * HASH表的地方，但是connect的时候或者disconnect的时候可能会进行rehash
+	 * 操作。
+	 */
+
 	if (!snum) {
 		DECLARE_BITMAP(bitmap, PORTS_PER_CHAIN);
 		unsigned short first, last;
@@ -285,6 +290,15 @@ int udp_lib_get_port(struct sock *sk, unsigned short snum,
 		} while (++first != last);
 		goto fail;
 	} else {
+		/* 根据端口哈希，找到对应的桶。再根据端口和地址，找到对应的桶。
+		 * 挑一个浅一点的桶，然后从桶里检查是否冲突。
+		 *
+		 * 根据地址和端口查找的，如果没有冲突，那么再根据空地址查找
+		 * 比对一遍，确保和ANY地址也不冲突。
+		 * 
+		 * 如果都不冲突，那么将其加入到hash和hash2表中，从而使得套接
+		 * 口处于可以工作状态。
+		 */
 		hslot = udp_hashslot(udptable, net, snum);
 		spin_lock_bh(&hslot->lock);
 		if (hslot->count > 10) {
@@ -317,6 +331,10 @@ found:
 	inet_sk(sk)->inet_num = snum;
 	udp_sk(sk)->udp_port_hash = snum;
 	udp_sk(sk)->udp_portaddr_hash ^= snum;
+	/* 各种检查都通过了，下面把套接口加入到HASH表里。如果当前套接口已经
+	 * 在HASH表里了，那这里就会保持不动（是不是会产生不一致？套接口在
+	 * 不属于它的HASH表里）。
+	 */
 	if (sk_unhashed(sk)) {
 		if (sk->sk_reuseport &&
 		    udp_reuseport_add_sock(sk, hslot)) {
@@ -683,6 +701,13 @@ struct sock *__udp4_lib_lookup(const struct net *net, __be32 saddr,
 	struct sock *result, *sk;
 	unsigned int hash2;
 
+	/* 
+	 * 该函数用于根据UDP报文查找UDP套接口。首先根据目的地址和目的端口来进行
+	 * 哈希计算，然后从hash2表中取出对应的桶。
+	 * 
+	 * 随后，调用udp4_lib_lookup2来从桶中查找目的套接口。查找过程中，像
+	 * TCP一样会进行分值计算，选取分值最高的套接口。
+	 */
 	hash2 = ipv4_portaddr_hash(net, daddr, hnum);
 	hslot2 = udp_hashslot2(udptable, hash2);
 
@@ -716,7 +741,10 @@ struct sock *__udp4_lib_lookup(const struct net *net, __be32 saddr,
 	if (result)
 		goto done;
 
-	/* Lookup wildcard sockets */
+	/* 根据目的端口和地址没有找到，那么去查找没有绑定地址的套接口，即本地
+	 * 地址为INADDR_ANY。可以看得出，这里的查找逻辑比较简单，没有什么花里
+	 * 胡哨的。
+	 */
 	hash2 = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum);
 	hslot2 = udp_hashslot2(udptable, hash2);
 
@@ -1127,8 +1155,9 @@ static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4,
 	int datalen = len - sizeof(*uh);
 	__wsum csum = 0;
 
-	/*
-	 * Create a UDP header
+	/* 
+	 * 这个函数会对skb的UDP头部进行构造，包括校验码的计算等，并调用ip_send_skb
+	 * 将报文发送出去。
 	 */
 	uh = udp_hdr(skb);
 	uh->source = inet->inet_sport;
@@ -1432,10 +1461,15 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		}
 	}
 
+	/* 对于connected类型的UDP，其套接口会绑定路由缓存项，这里将其取出来。 */
 	if (connected)
 		rt = dst_rtable(sk_dst_check(sk, 0));
 
 	if (!rt) {
+		/* 
+		 * 如果没有找到路由缓存项，那么调用ip_route_output_flow进行路由
+		 * 信息的查找。该函数会进行路由查找，并在查找到的时候创建路由缓存。
+		 */
 		struct net *net = sock_net(sk);
 		__u8 flow_flags = inet_sk_flowi_flags(sk);
 
@@ -1476,6 +1510,8 @@ back_from_confirm:
 	/* Lockless fast path for the non-corking case. */
 	if (!corkreq) {
 		struct inet_cork cork;
+		
+		/* 不需要并包的话（比如没有指定MSG_MORE标志），走这里的流程。 */
 
 		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen,
 				  sizeof(struct udphdr), &ipc, &rt,
@@ -2237,6 +2273,10 @@ EXPORT_SYMBOL(__udp_disconnect);
 int udp_disconnect(struct sock *sk, int flags)
 {
 	lock_sock(sk);
+	/* 
+	 * 进行UDP的disconnect：把对端的地址和端口都置空，如果本地端口或者地址
+	 * 不是主动绑定的，那么将其置空并重新进行HASH，同时刷新路由。
+	 */
 	__udp_disconnect(sk, flags);
 	release_sock(sk);
 	return 0;
@@ -2245,6 +2285,9 @@ EXPORT_IPV6_MOD(udp_disconnect);
 
 void udp_lib_unhash(struct sock *sk)
 {
+	/* 将UDP套接口从哈希表中移除。这里会使用之前计算出来的两个哈希值来
+	 * 进行桶的查找，因此这两个值是不能动的，否则无法顺利进行unhash。
+	 */
 	if (sk_hashed(sk)) {
 		struct udp_table *udptable = udp_get_table_prot(sk);
 		struct udp_hslot *hslot, *hslot2;
@@ -2282,6 +2325,12 @@ void udp_lib_rehash(struct sock *sk, u16 newhash, u16 newhash4)
 	if (sk_hashed(sk)) {
 		struct udp_table *udptable = udp_get_table_prot(sk);
 		struct udp_hslot *hslot, *hslot2, *nhslot2;
+
+		/* 进行重新HASH。这个重新HASH只会更新hash2表，因此可以看出重新
+		 * 哈希都是在地址发生变化的情况下发生，端口是不会发生变化的。
+		 * 
+		 * 更新HASH2表的时候，会先把套接口从旧桶里删除，再加到新桶里。
+		 */
 
 		hslot = udp_hashslot(udptable, sock_net(sk),
 				     udp_sk(sk)->udp_port_hash);

@@ -439,6 +439,13 @@ struct sock {
 
 	struct sk_filter __rcu	*sk_filter;
 	union {
+		/* 
+		 * 套接口上的等待队列，POLL或者内存等待用的都是这个队列。其中，POLL
+		 * 使用的是sock->wq，与sk->sk_wq指向的是同一个队列。
+		 * 
+		 * 针对于等待内存，其入队函数为 sk_stream_wait_memory ；
+		 * 针对于POLL，其入队函数为 __pollwait 。
+		 */
 		struct socket_wq __rcu	*sk_wq;
 		/* private: */
 		struct socket_wq	*sk_wq_raw;
@@ -476,13 +483,22 @@ struct sock {
 	atomic_t		sk_omem_alloc;
 	int			sk_err_soft;
 
+
+	/* 发送队列里的报文所占用的内存。 */
 	int			sk_wmem_queued;
+	/* 
+	 * 表示提交发送的skb所占用的内存。注意，这里指的是已经进行发送的报文，
+	 * 而不是发送队列里的报文，因此，对于TCP而言，这里统计的是rtx队列里的
+	 * 报文所占用的内存。
+	 */
 	refcount_t		sk_wmem_alloc;
 	unsigned long		sk_tsq_flags;
 	union {
 		struct sk_buff	*sk_send_head;
+		/* 重传队列，这里的都是已经发送过但是还没有确认的报文。*/
 		struct rb_root	tcp_rtx_queue;
 	};
+	/* 每一个等待发送的报文都放在这个队列，注意是没有发送过的。 */
 	struct sk_buff_head	sk_write_queue;
 	struct page_frag	sk_frag;
 	union {
@@ -490,6 +506,7 @@ struct sock {
 		struct timer_list	tcp_retransmit_timer;
 		struct timer_list	mptcp_retransmit_timer;
 	};
+	/* 每秒发送速率（bytes/s），由拥塞控制动态更新。 */
 	unsigned long		sk_pacing_rate; /* bytes per second */
 	atomic_t		sk_zckey;
 	atomic_t		sk_tskey;
@@ -1094,6 +1111,7 @@ static inline void sk_acceptq_added(struct sock *sk)
  *	return READ_ONCE(sk->sk_ack_backlog) >= READ_ONCE(sk->sk_max_ack_backlog);
  * Then please take a look at commit 64a146513f8f ("[NET]: Revert incorrect accept queue backlog changes.")
  */
+/* 已结完成三次握手，等待accept的队列已经满了。 */
 static inline bool sk_acceptq_is_full(const struct sock *sk)
 {
 	return READ_ONCE(sk->sk_ack_backlog) > READ_ONCE(sk->sk_max_ack_backlog);

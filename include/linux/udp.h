@@ -53,7 +53,11 @@ struct udp_prod_queue {
 struct udp_sock {
 	/* inet_sock has to be the first member */
 	struct inet_sock inet;
+	/* 根据端口计算出来的哈希值（就是本地端口）。在进行套接口查找的时候，
+	 * 是根据这个来进行匹配的，而不是inet_sport和inet_inum。
+	 */
 #define udp_port_hash		inet.sk.__sk_common.skc_u16hashes[0]
+	/* 根据地址和端口计算出来的哈希值 */
 #define udp_portaddr_hash	inet.sk.__sk_common.skc_u16hashes[1]
 #define udp_portaddr_node	inet.sk.__sk_common.skc_portaddr_node
 

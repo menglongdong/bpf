@@ -1452,6 +1452,12 @@ static inline unsigned int tcp_left_out(const struct tcp_sock *tp)
  */
 static inline unsigned int tcp_packets_in_flight(const struct tcp_sock *tp)
 {
+	/*
+	 * 该函数用来计算网络中的报文的段数，其中，
+	 * packets_out： 传输队列中发送出去的报文
+	 * tcp_left_out：已经脱离网络的报文量，包括被确认了的报文和被标记为LOST的报文
+	 * retrans_out： 已经重传了的报文。
+	 */
 	return tp->packets_out - tcp_left_out(tp) + tp->retrans_out;
 }
 
@@ -1532,6 +1538,15 @@ static inline u32 tcp_wnd_end(const struct tcp_sock *tp)
  * risks 100% overshoot. The advantage is that we discourage application to
  * either send more filler packets or data to artificially blow up the cwnd
  * usage, and allow application-limited process to probe bw more aggressively.
+ */
+/*
+ * 该函数用于检查增大拥塞窗口是否有必要，即如果当前流量不大的话就没必要增大cwnd。
+ * 也就是说，拥塞窗口是否限制了数据的发送。
+ *
+ * 在慢启动阶段，如果拥塞窗口的利用率达到50%以上，那么就认为有必要继续增大拥塞
+ * 窗口。
+ *
+ * 在非慢启动阶段，发送数据时，如果拥塞窗口满了，is_cwnd_limited会被设置。
  */
 static inline bool tcp_is_cwnd_limited(const struct sock *sk)
 {

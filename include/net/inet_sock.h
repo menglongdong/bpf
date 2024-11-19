@@ -226,11 +226,15 @@ struct inet_sock {
 #define inet_daddr		sk.__sk_common.skc_daddr
 #define inet_rcv_saddr		sk.__sk_common.skc_rcv_saddr
 #define inet_dport		sk.__sk_common.skc_dport
+	/* skv_num代表当前绑定的端口。 */
 #define inet_num		sk.__sk_common.skc_num
 
 	unsigned long		inet_flags;
 	__be32			inet_saddr;
 	__s16			uc_ttl;
+	/* inet_sport代表当前使用（生效）的端口。比如UDP套接口，发送报文的时候，
+	 * 进行路由查找和报文源端口，使用的都是这个端口。
+	 */
 	__be16			inet_sport;
 	struct ip_options_rcu __rcu	*inet_opt;
 	atomic_t		inet_id;

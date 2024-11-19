@@ -762,6 +762,7 @@ void tcp_push(struct sock *sk, int flags, int mss_now,
 
 	tcp_mark_urg(tp, flags);
 
+	/* 检查是否启用自动并包 */
 	if (tcp_should_autocork(sk, skb, size_goal)) {
 
 		/* avoid atomic op if TSQ_THROTTLED bit is already set */
@@ -780,6 +781,7 @@ void tcp_push(struct sock *sk, int flags, int mss_now,
 	if (flags & MSG_MORE)
 		nonagle = TCP_NAGLE_CORK;
 
+	/* 进行TCP报文的发送 */
 	__tcp_push_pending_frames(sk, mss_now, nonagle);
 }
 
@@ -1070,6 +1072,9 @@ int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg, int *copied,
 	struct sockaddr *uaddr = msg->msg_name;
 	int err, flags;
 
+	/* 
+	 * 处理快速打开情况下的客户端第一次数据发送。
+	 */
 	if (!(READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_fastopen) &
 	      TFO_CLIENT_ENABLE) ||
 	    (uaddr && msg->msg_namelen >= sizeof(uaddr->sa_family) &&
@@ -1143,6 +1148,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 
 	flags = msg->msg_flags;
 
+	/* 初始化sockc，并且用msg_control中的数据来进行设置。 */
 	sockc = (struct sockcm_cookie){ .tsflags = READ_ONCE(sk->sk_tsflags) };
 	if (msg->msg_controllen) {
 		sockc_err = sock_cmsg_send(sk, msg, &sockc);
@@ -1151,6 +1157,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		 */
 	}
 
+	/* 检查是否启用了报文零拷贝技术。如果启用了，那么初始化uarg信息。 */
 	if ((flags & MSG_ZEROCOPY) && size) {
 		if (msg->msg_ubuf) {
 			uarg = msg->msg_ubuf;
@@ -1189,6 +1196,9 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		goto out_err;
 	}
 
+	/* 检查是否是快速打开或者延迟建链状态，是的话那么调用 tcp_sendmsg_fastopen
+	 * 同时进行建链和报文的发送。
+	 */
 	if (unlikely(flags & MSG_FASTOPEN ||
 		     inet_test_bit(DEFER_CONNECT, sk)) &&
 	    !tp->repair) {
@@ -1203,9 +1213,10 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 
 	tcp_rate_check_app_limited(sk);  /* is sending application-limited? */
 
-	/* Wait for a connection to finish. One exception is TCP Fast Open
-	 * (passive side) where data is allowed to be sent before a connection
-	 * is fully established.
+	/* 如果当前不是在建链或者CLOSE_WAIT状态，并且当前不是快速打开中的被动建链端，
+	 * 那么在当前套接口上等待，直到建链完成。
+	 * 这里可以看出，快速打开过程中，被动端是可以在建链完成前持续发送数据的。而主动
+	 * 建链端除了第一次发送的数据，是不能在建链完成前继续发送数据的。
 	 */
 	if (((1 << sk->sk_state) & ~(TCPF_ESTABLISHED | TCPF_CLOSE_WAIT)) &&
 	    !tcp_passive_fastopen(sk)) {
@@ -1239,15 +1250,24 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	copied = 0;
 
 restart:
+	/* 
+	 * 计算MSS，对于本地通信该取值为65536。同时，计算size_goal，即一个skb中
+	 * 要存储的数据的长度。对于支持GSO的场景，这个值取得是max_gso_size，即
+	 * 网卡驱动中设置的GSO最大尺寸。
+	 */
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
 	err = -EPIPE;
+	/* 检查套接口状态。 */
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
 	while (msg_data_left(msg)) {
 		int copy = 0;
 
+		/* copy为当前skb中可以拷贝的报文尺寸，这里取发送队列中的最后一个
+		 * 作为当前 skb
+		 */
 		skb = tcp_write_queue_tail(sk);
 		if (skb)
 			copy = size_goal - skb->len;
@@ -1257,6 +1277,16 @@ restart:
 		if (copy <= 0 || !tcp_skb_can_collapse_to(skb)) {
 			bool first_skb;
 
+			/* 
+			 * 在当前skb中没有剩余空间的情况下，分配新的skb来进行数据
+			 * 拷贝。对于skb的分配，针对是否是发送队列中的第一个报文，
+			 * 处理情况还不一样，具体可以看sk_stream_alloc_skb的
+			 * 实现。
+			 * 
+			 * process_backlog用于处理backlog中的队列，这里是为了
+			 * 减少锁的竞争，因为此时已经持锁了，所以在这期间处理backlog
+			 * 中的报文更加合理。
+			 */
 new_segment:
 			if (!sk_stream_memory_free(sk))
 				goto wait_for_space;
@@ -1267,6 +1297,13 @@ new_segment:
 					goto restart;
 			}
 			first_skb = tcp_rtx_and_write_queues_empty(sk);
+			/* 
+			 * 进行skb的分配。分配出来的skb的线性区长度为TCP报头长度，
+			 * 即不把TCP数据存储到线性区，只存储到page区。
+			 * 
+			 * 如果是第一个报文，那么会放宽内存限制，强制使其发送一个
+			 * 出去。
+			 */
 			skb = tcp_stream_alloc_skb(sk, sk->sk_allocation,
 						   first_skb);
 			if (!skb)
@@ -1288,7 +1325,7 @@ new_segment:
 				TCP_SKB_CB(skb)->sacked |= TCPCB_REPAIRED;
 		}
 
-		/* Try to append data to the end of skb. */
+		/* 如果skb中的剩余空间大于剩余数据，那么将copy更新为剩余数据。 */
 		if (copy > msg_data_left(msg))
 			copy = msg_data_left(msg);
 
@@ -1296,6 +1333,19 @@ new_segment:
 			bool merge = true;
 			int i = skb_shinfo(skb)->nr_frags;
 			struct page_frag *pfrag = sk_page_frag(sk);
+
+			/* 
+			 * 线性区没有剩余空间，且不是零拷贝会走到这里。这里会将报文
+			 * 内容拷贝到skb的聚合/分散IO区。这样一来的话，可以方便后面
+			 * 的硬件GSO/TSO等特性。
+			 * 
+			 * 这里的pfrag用来存储page缓存，即上一个skb没有用完的page
+			 * （有剩余空间）会放到这里，方便下一个skb继续使用。
+			 * 
+			 * 可以看出，目前TCP报文数据采用的都是这种page物理页的方式。
+			 * 
+			 * 这个版本里面好像不会把数据拷贝到上一个skb的线性区里了。
+			 */
 
 			if (!sk_page_frag_refill(sk, pfrag))
 				goto wait_for_space;
@@ -1350,6 +1400,10 @@ new_segment:
 					goto wait_for_space;
 			}
 
+			/*
+			 * 走到这里就是零拷贝部分的实现了，思路与ip_append_data
+			 * 部分类似。
+			 */
 			err = skb_zerocopy_iter_stream(sk, skb, msg, copy, uarg,
 						       binding);
 			if (err == -EMSGSIZE || err == -EEXIST) {
@@ -1387,6 +1441,7 @@ new_segment:
 		if (!copied)
 			TCP_SKB_CB(skb)->tcp_flags &= ~TCPHDR_PSH;
 
+		/* 更新tcp套接口的write_seq以及skb的end_seq序列号。 */
 		WRITE_ONCE(tp->write_seq, tp->write_seq + copy);
 		TCP_SKB_CB(skb)->end_seq += copy;
 		tcp_skb_pcount_set(skb, 0);
@@ -1401,6 +1456,10 @@ new_segment:
 		if (skb->len < size_goal || (flags & MSG_OOB) || unlikely(tp->repair))
 			continue;
 
+		/* 
+		 * 如果未发送的数据超过了一半的窗口，那么强制发送出去。如果当前报文是
+		 * 发送队列中的第一个，那么将其以nagle算法发送出去。
+		 */
 		if (forced_push(tp)) {
 			tcp_mark_push(tp, skb);
 			__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_PUSH);
@@ -1423,6 +1482,7 @@ wait_for_space:
 	}
 
 out:
+	/* 走到这里，说明报文已经拷贝完成了，下面就是发送报文了。 */
 	if (copied) {
 		tcp_tx_timestamp(sk, &sockc);
 		tcp_push(sk, flags, mss_now, tp->nonagle, size_goal);
@@ -2239,6 +2299,11 @@ static int tcp_zerocopy_receive(struct sock *sk,
 	bool mmap_locked;
 	int ret;
 
+	/* 
+	 * 总体思路：首先检查合法性，即检查收包的内存地址对应的vma是否合法、长度是否合适
+	 * 等。
+	 */
+
 	zc->copybuf_len = 0;
 	zc->msg_flags = 0;
 
@@ -2283,6 +2348,10 @@ static int tcp_zerocopy_receive(struct sock *sk,
 		int mappable_offset;
 		struct page *page;
 
+		/* 
+		 * length为已经拷贝的报文数据的长度。如果用户态缓冲区剩余空间还够
+		 * 一个页，那么继续进行报文映射。
+		 */
 		if (zc->recv_skip_hint < PAGE_SIZE) {
 			u32 offset_frag;
 
@@ -3106,12 +3175,14 @@ static int tcp_close_state(struct sock *sk)
 
 void tcp_shutdown(struct sock *sk, int how)
 {
-	/*	We need to grab some memory, and put together a FIN,
-	 *	and then put it into the queue to be sent.
-	 *		Tim MacKenzie(tym@dibbler.cs.monash.edu.au) 4 Dec '92.
+	/*
+	 * 如果是接收方向的关闭，那么不需要做任何处理，只需要将RCV_SHUTDOWN标志
+	 * 给设置上就可以了。
 	 */
 	if (!(how & SEND_SHUTDOWN))
 		return;
+
+	/* 将套接口的shutdown标志设置为how，如果是发送方向的关闭，那么发送FIN报文。 */
 
 	/* If we've already sent a FIN, or it's a closed state, skip this. */
 	if ((1 << sk->sk_state) &
@@ -3178,8 +3249,15 @@ void __tcp_close(struct sock *sk, long timeout)
 	struct sk_buff *skb;
 	int state;
 
+	/*
+	 * 使用close的方式主动断开连接。该方式会直接释放接收队列中的所有报文，不再
+	 * 接收新的报文以及不再发送新的数据，是一种双向关闭的断开方式。
+	 */
+
+	/* 接收和发送都关闭。 */
 	WRITE_ONCE(sk->sk_shutdown, SHUTDOWN_MASK);
 
+	/* LISTEN状态下，无需断开连接，直接将套接口状态设置为CLOSE即可。 */
 	if (sk->sk_state == TCP_LISTEN) {
 		tcp_set_state(sk, TCP_CLOSE);
 
@@ -3217,48 +3295,42 @@ void __tcp_close(struct sock *sk, long timeout)
 	if (unlikely(tcp_sk(sk)->repair)) {
 		sk->sk_prot->disconnect(sk, 0);
 	} else if (data_was_unread) {
-		/* Unread data was tossed, zap the connection. */
+		/*
+		 * 存在未接收的报文被释放了，这种情况下进行连接的RST，快速释放。
+		 * 这个也是RFC规范中制定的。
+		 */
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONCLOSE);
 		tcp_set_state(sk, TCP_CLOSE);
 		tcp_send_active_reset(sk, sk->sk_allocation,
 				      SK_RST_REASON_TCP_ABORT_ON_CLOSE);
 	} else if (sock_flag(sk, SOCK_LINGER) && !sk->sk_lingertime) {
-		/* Check zero linger _after_ checking for unread data. */
+		/*
+		 * 对于设置了SOCK_LINGER选项且sk_lingertime为0的情况，不使用四次挥手，
+		 * 而是调用tcp_disconnect直接使用RST断开连接。
+		 *
+		 * SOCK_LINGER为以阻塞的方式断开连接，sk_lingertime为等待超时时间。
+		 */
 		sk->sk_prot->disconnect(sk, 0);
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONDATA);
 	} else if (tcp_close_state(sk)) {
-		/* We FIN if the application ate all the data before
-		 * zapping the connection.
-		 */
-
-		/* RED-PEN. Formally speaking, we have broken TCP state
-		 * machine. State transitions:
-		 *
+		/*
+		 * 进行TCP状态的迁移，迁移的逻辑为：
 		 * TCP_ESTABLISHED -> TCP_FIN_WAIT1
 		 * TCP_SYN_RECV	-> TCP_FIN_WAIT1 (it is difficult)
 		 * TCP_CLOSE_WAIT -> TCP_LAST_ACK
 		 *
-		 * are legal only when FIN has been sent (i.e. in window),
-		 * rather than queued out of window. Purists blame.
-		 *
-		 * F.e. "RFC state" is ESTABLISHED,
-		 * if Linux state is FIN-WAIT-1, but FIN is still not sent.
-		 *
-		 * The visible declinations are that sometimes
-		 * we enter time-wait state, when it is not required really
-		 * (harmless), do not send active resets, when they are
-		 * required by specs (TCP_ESTABLISHED, TCP_CLOSE_WAIT, when
-		 * they look as CLOSING or LAST_ACK for Linux)
-		 * Probably, I missed some more holelets.
-		 * 						--ANK
-		 * XXX (TFO) - To start off we don't support SYN+ACK+FIN
-		 * in a single packet! (May consider it later but will
-		 * probably need API support or TCP_CORK SYN-ACK until
-		 * data is written and socket is closed.)
+		 * 如果下一个状态需要发送FIN，则进行FIN报文的发送。
 		 */
 		tcp_send_fin(sk);
 	}
 
+	/*
+	 * 等待套接口的状态转变，变为非TCPF_FIN_WAIT1 | TCPF_CLOSING | TCPF_LAST_ACK
+	 * 中的状态，这里的话一般是变为TCPF_FIN_WAIT2。
+	 *
+	 * 这个在timeout不为0的情况下生效，而timeout是取的sk->sk_lingertime，可以由
+	 * 用户设置。这个等待的过程一般用于等待发送缓冲区的数据进行发送完成。
+	 */
 	sk_stream_wait_close(sk, timeout);
 
 adjudge_to_death:
@@ -3277,23 +3349,21 @@ adjudge_to_death:
 	if (state != TCP_CLOSE && sk->sk_state == TCP_CLOSE)
 		goto out;
 
-	/*	This is a (useful) BSD violating of the RFC. There is a
-	 *	problem with TCP as specified in that the other end could
-	 *	keep a socket open forever with no application left this end.
-	 *	We use a 1 minute timeout (about the same as BSD) then kill
-	 *	our end. If they send after that then tough - BUT: long enough
-	 *	that we won't make the old 4*rto = almost no time - whoops
-	 *	reset mistake.
-	 *
-	 *	Nope, it was not mistake. It is really desired behaviour
-	 *	f.e. on http servers, when such sockets are useless, but
-	 *	consume significant resources. Let's do it with special
-	 *	linger2	option.					--ANK
+	/*
+	 * 处理TCP_FIN_WAIT2状态，这个一般是由于上面的timeout导致的状态变迁。
 	 */
-
 	if (sk->sk_state == TCP_FIN_WAIT2) {
 		struct tcp_sock *tp = tcp_sk(sk);
 		if (READ_ONCE(tp->linger2) < 0) {
+			/*
+			 * 强制TCP的释放，不通过TIME_WAIT状态，发送RST。
+			 * 其中，linger2为用户设置的FIN_WAIT2状态下的
+			 * 超时时间。默认值为0，负值代表不在FIN2处等待，
+			 * 直接RST；正值代表超时时间；0的话，超时时间取
+			 * sysctl_tcp_fin_timeout。
+			 *
+			 * 注意：这个值不会大于sysctl_tcp_fin_timeout
+			 */
 			tcp_set_state(sk, TCP_CLOSE);
 			tcp_send_active_reset(sk, GFP_ATOMIC,
 					      SK_RST_REASON_TCP_ABORT_ON_LINGER);
@@ -3301,6 +3371,10 @@ adjudge_to_death:
 					LINUX_MIB_TCPABORTONLINGER);
 		} else {
 			const int tmo = tcp_fin_time(sk);
+			/*
+			 * 如果FIN_WAIT2状态下的超时时间比TIMEWAIT长，那么采用定时器
+			 * 来处理。否则，采用timewait控制块来取代套接口。
+			 */
 
 			if (tmo > TCP_TIMEWAIT_LEN) {
 				tcp_reset_keepalive_timer(sk,
@@ -3312,6 +3386,7 @@ adjudge_to_death:
 		}
 	}
 	if (sk->sk_state != TCP_CLOSE) {
+		/* 进行资源状态的检查，包括孤儿套接口的数量等。 */
 		if (tcp_check_oom(sk, 0)) {
 			tcp_set_state(sk, TCP_CLOSE);
 			tcp_send_active_reset(sk, GFP_ATOMIC,
@@ -3325,6 +3400,7 @@ adjudge_to_death:
 	}
 
 	if (sk->sk_state == TCP_CLOSE) {
+		/* 如果套接口是TCP_CLOSE状态，那么将其销毁。 */
 		struct request_sock *req;
 
 		req = rcu_dereference_protected(tcp_sk(sk)->fastopen_rsk,

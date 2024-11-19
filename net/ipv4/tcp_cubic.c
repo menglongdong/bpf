@@ -24,6 +24,11 @@
  * this behaves the same as the original Reno.
  */
 
+/* 
+ * 与bic算法类似，不同的是这个方法采用的是时间驱动的方式，而且采用了三次函数曲线，相对于
+ * bic拥有更好的公平性。
+ */
+
 #include <linux/mm.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>

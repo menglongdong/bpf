@@ -70,6 +70,9 @@ static bool sk_is_connect_bind(const struct sock *sk)
  * Allocate and initialize a new local port bind bucket.
  * The bindhash mutex for snum's hash chain must be held here.
  */
+/**
+ * 为snum分配一个inet_bind_bucket并添加到hash表中
+ */
 struct inet_bind_bucket *inet_bind_bucket_create(struct kmem_cache *cachep,
 						 struct net *net,
 						 struct inet_bind_hashbucket *head,
@@ -352,17 +355,24 @@ static inline int compute_score(struct sock *sk, const struct net *net,
 {
 	int score = -1;
 
+	/* 该记分方式的标准为：优先选择绑定了地址、绑定了网口、绑定了CPU的套接口。 */
 	if (net_eq(sock_net(sk), net) && READ_ONCE(sk->sk_num) == hnum &&
 			!ipv6_only_sock(sk)) {
+		/* 这个套接口绑定了地址，但是不是我们的地址，不要 */
 		if (sk->sk_rcv_saddr != daddr)
 			return -1;
 
+		/* 绑定了网口，但是不是报文的网口，直接不要 */
 		if (!inet_sk_bound_dev_eq(net, sk->sk_bound_dev_if, dif, sdif))
 			return -1;
 		score =  sk->sk_bound_dev_if ? 2 : 1;
 
 		if (sk->sk_family == PF_INET)
 			score++;
+		/*
+		 * 绑定CPU检测，这个不是硬性要求，但是会优选当前CPU上绑定的套接口。
+		 * 这种绑定CPU的方式是为了提高效率，节省了CPU迁移的开销。
+		 */
 		if (READ_ONCE(sk->sk_incoming_cpu) == raw_smp_processor_id())
 			score++;
 	}
@@ -422,8 +432,16 @@ static struct sock *inet_lhash2_lookup(const struct net *net,
 	int score, hiscore = 0;
 
 	sk_nulls_for_each_rcu(sk, node, &ilb2->nulls_head) {
+		/**
+		 * 从链表中找出一个最匹配的sk，通过分值来判断。如果sk指定了地址，但是与daddr
+		 * 不匹配，那么直接返回失败。
+		 */
 		score = compute_score(sk, net, hnum, daddr, dif, sdif);
 		if (score > hiscore) {
+			/* 
+			 * 如果找到的sk启动了端口重用，那么以一种负载均衡的方式，从所有
+			 * 端口重用的套接口中挑一个listen的套接口。
+			 */
 			result = inet_lookup_reuseport(net, sk, skb, doff,
 						       saddr, sport, daddr, hnum, inet_ehashfn);
 			if (result)
@@ -479,6 +497,7 @@ struct sock *__inet_lookup_listener(const struct net *net,
 			goto done;
 	}
 
+	/* 先根据端口和地址计算hash，再到lhash2中查找监听sock。 */
 	hashinfo = net->ipv4.tcp_death_row.hashinfo;
 	hash2 = ipv4_portaddr_hash(net, daddr, hnum);
 	ilb2 = inet_lhash2_bucket(hashinfo, hash2);
@@ -489,7 +508,9 @@ struct sock *__inet_lookup_listener(const struct net *net,
 	if (result)
 		goto done;
 
-	/* Lookup lhash2 with INADDR_ANY */
+	/* 
+	 * 先根据目的地址+端口查找，找不到再通过INADDR_ANY+端口查找。
+	 */
 	hash2 = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum);
 	ilb2 = inet_lhash2_bucket(hashinfo, hash2);
 
@@ -611,19 +632,29 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 	sk_nulls_for_each(sk2, node, &head->chain) {
 		if (sk2->sk_hash != hash)
 			continue;
+		
+		/* 
+		 * 遍历建链哈希表，从中找到与当前套接口四元组一致的套接口（冲突套接口）
+		 * 判断当前套接口是不是唯一的。
+		 * 
+		 * 如果冲突的套接口是tw套接口，而且启用了tcp_tw_reuse，那么认为
+		 * 不冲突，否则，认为冲突。
+		 */
 
 		if (likely(inet_match(net, sk2, acookie, ports, dif, sdif))) {
 			if (sk2->sk_state == TCP_TIME_WAIT) {
 				tw = inet_twsk(sk2);
-				if (tcp_twsk_unique(sk, sk2, twp))
-					break;
+					/* 对TCP来说，若tw可复用则不视为冲突。 */
+					if (tcp_twsk_unique(sk, sk2, twp))
+						break;
 			}
 			goto not_unique;
 		}
 	}
 
-	/* Must record num and sport now. Otherwise we will see
-	 * in hash table socket with a funny identity.
+	/* 
+	 * 检查通过后，将套接口加入到ehash表中，同时将tw从hash表中删除，然后
+	 * 取消其定时器并删除。
 	 */
 	inet->inet_num = lport;
 	inet->inet_sport = htons(lport);
@@ -803,6 +834,7 @@ int inet_hash(struct sock *sk)
 			goto unlock;
 	}
 	sock_set_flag(sk, SOCK_RCU_FREE);
+	/* 将套接口加到lhash2表中 */
 	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
 		sk->sk_family == AF_INET6)
 		__sk_nulls_add_node_tail_rcu(sk, &ilb2->nulls_head);
@@ -1063,6 +1095,21 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 
 	l3mdev = inet_sk_bound_l3mdev(sk);
 
+	/* 
+	 * 对于没有绑定端口的情况，这里会直接进行空闲套接口的查找和绑定。这里没有使用
+	 * bind的那一套，因此为这里的绑定场景已经很明显了，所以不需要进行那么复杂的绑
+	 * 定检查。
+	 * 
+	 * 基本逻辑：从预留端口中随机挑选一个，检查是否可用。不可用的话，继续检查+2后
+	 * 的是否可用。是否可用的判断标准：
+	 * 1、这个端口必须没有被使用过，不能开启端口、地址重用，即必须得是这里分配出去
+	 *    的，只有这样reuse才会是-1；
+	 * 2、检查是否与已建链套接口冲突，与上面的逻辑一致。
+	 * 
+	 * 也就是说，随机端口分配不会分配到重用的端口上。另外，tw类型的套接口必须也得
+	 * 是这里随机分配的，不能是主动bind的。如果是主动bind的，那么当前套接口也得
+	 * 是主动bind的，即上面的路径才能使用地址、端口复用。
+	 */
 	local_ports = inet_sk_get_local_port_range(sk, &low, &high);
 	step = local_ports ? 1 : 2;
 
@@ -1257,6 +1304,7 @@ static void init_hashinfo_lhash2(struct inet_hashinfo *h)
 	}
 }
 
+/* 初始化lhash2表，该过程会直接分配hash表以及初始化所有的inet_listen_hashbucket实例 */
 void __init inet_hashinfo2_init(struct inet_hashinfo *h, const char *name,
 				unsigned long numentries, int scale,
 				unsigned long low_limit,

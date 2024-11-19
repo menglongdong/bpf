@@ -233,6 +233,10 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len
 	struct rtable *rt;
 	int err;
 
+	/**
+	 * 该函数用于主动进行TCP建链时候的函数，即connect系统调用里面会
+	 * 调用的函数。
+	 */
 	if (addr_len < sizeof(struct sockaddr_in))
 		return -EINVAL;
 
@@ -304,6 +308,19 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len
 	 * complete initialization after this.
 	 */
 	tcp_set_state(sk, TCP_SYN_SENT);
+	/**
+	 * 进行端口的绑定。一个TCP连接需要与本地的某个端口绑定才行，即需要设置源端口。
+	 * 对于用户没有主动调用bind系统调用进行绑定的情况（主要情况），内核会从当前
+	 * 可用端口中随机挑一个未使用的，并加入到bind哈希表中。
+	 * 
+	 * 这里也会进行端口绑定的冲突检查，但是与listen的时候走的不是一个线路。因为
+	 * 绑定的时候已经进行过检查了，所以这里只做四元组的冲突检查，即有没有和已经
+	 * 建链的套接口产生冲突。因为绑定的时候没有指定目的地址和端口，因此这个检查
+	 * 要放到这个地方来做。
+	 * 
+	 * 这里的tcp_death_row是用来对网络命名空间里的tw套接口进行限制的，里面保存了
+	 * tw套接口的数量和sysctl接口数据。
+	 */
 	err = inet_hash_connect(tcp_death_row, sk);
 	if (err)
 		goto failure;
@@ -338,11 +355,16 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len
 
 	atomic_set(&inet->inet_id, get_random_u16());
 
+	/**
+	 * 检查是否使用延迟连接。如果当前套接口使用了fastopen，并且存在有效的cookie， 
+	 * 那么这里将不进行TCP连接，而是推迟到发送数据的时候再连接。
+	 */
 	if (tcp_fastopen_defer_connect(sk, &err))
 		return err;
 	if (err)
 		goto failure;
 
+	/* 使用常规的方式进行三次握手的进行。 */
 	err = tcp_connect(sk);
 
 	if (err)
@@ -1786,6 +1808,10 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 
 	if (__inet_inherit_port(sk, newsk) < 0)
 		goto put_and_exit;
+	/*
+	 * 将新创建的sock添加到ehash表中，同时移出req_unhash套接口。该方法可用于在
+	 * 将request_sock转换为sock的时候进行使用。
+	 */
 	*own_req = inet_ehash_nolisten(newsk, req_to_sk(req_unhash),
 				       &found_dup_sk);
 	if (likely(*own_req)) {
@@ -1825,6 +1851,10 @@ static struct sock *tcp_v4_cookie_check(struct sock *sk, struct sk_buff *skb)
 #ifdef CONFIG_SYN_COOKIES
 	const struct tcphdr *th = tcp_hdr(skb);
 
+	/*
+	 * SYN_COOKIE套接口是一种处于SYN_RECV状态下的套接口，因此其不对syn报文进行
+	 * 响应。
+	 */
 	if (!th->syn)
 		sk = cookie_v4_check(sk, skb);
 #endif
@@ -1861,6 +1891,9 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	enum skb_drop_reason reason;
 	struct sock *rsk;
 
+	/*
+	 * 该函数处理完整sock的接收路径（非request_sock/非timewait）。
+	 */
 	reason = psp_sk_rx_policy_check(sk, skb);
 	if (reason)
 		goto err_discard;
@@ -1888,12 +1921,17 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	if (tcp_checksum_complete(skb))
 		goto csum_err;
 
+	/*
+	 * 这里是对于支持cookie类型的套接口进行处理，SYN_COOKIE是内核中的一种用于
+	 * 防止DOS攻击的手段。
+	 */
 	if (sk->sk_state == TCP_LISTEN) {
 		struct sock *nsk = tcp_v4_cookie_check(sk, skb);
 
 		if (!nsk)
 			return 0;
 		if (nsk != sk) {
+			/* 如果返回了新的sock，说明是cookie套接口。*/
 			reason = tcp_child_process(sk, nsk, skb);
 			if (reason) {
 				rsk = nsk;
@@ -2193,9 +2231,14 @@ lookup:
 	if (!sk)
 		goto no_tcp_socket;
 
+	/* 进入TW套接口的处理流程。 */
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
+	/*
+	 * request类型的套接口的处理逻辑。由于SYN_RECV状态下的套接口并不一定都是
+	 * request类型的，因此使用NEW_SYN_RECV状态来识别。
+	 */
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
 		struct request_sock *req = inet_reqsk(sk);
 		bool req_stolen = false;
@@ -2217,6 +2260,10 @@ lookup:
 			reqsk_put(req);
 			goto csum_error;
 		}
+		/*
+		 * 如果当前的request套接口的父套接口不再监听了，那么释放这个
+		 * request不作处理。
+		 */
 		if (unlikely(sk->sk_state != TCP_LISTEN)) {
 			nsk = reuseport_migrate_sock(sk, req_to_sk(req), skb);
 			if (!nsk) {
@@ -2235,13 +2282,17 @@ lookup:
 		}
 		refcounted = true;
 		nsk = NULL;
-		if (!tcp_filter(sk, skb, &drop_reason)) {
-			th = (const struct tcphdr *)skb->data;
-			iph = ip_hdr(skb);
-			tcp_v4_fill_cb(skb, iph, th);
+			/*
+			 * 先做socket filter，再进行req校验/子sock转换与后续处理。
+			 */
+			if (!tcp_filter(sk, skb, &drop_reason)) {
+				th = (const struct tcphdr *)skb->data;
+				iph = ip_hdr(skb);
+				tcp_v4_fill_cb(skb, iph, th);
 			nsk = tcp_check_req(sk, skb, req, false, &req_stolen,
 					    &drop_reason);
 		}
+		/* listen状态下的套接口中的eBPF过滤未通过 */
 		if (!nsk) {
 			reqsk_put(req);
 			if (req_stolen) {
@@ -2258,6 +2309,7 @@ lookup:
 		}
 		nf_reset_ct(skb);
 		if (nsk == sk) {
+			/* 这里说明当前的skb无效，不进行处理。 */
 			reqsk_put(req);
 			tcp_v4_restore_cb(skb);
 		} else {
@@ -2296,8 +2348,9 @@ process:
 
 	nf_reset_ct(skb);
 
-	if (tcp_filter(sk, skb, &drop_reason))
-		goto discard_and_relse;
+		/* 调用套接字过滤器进行报文过滤。 */
+		if (tcp_filter(sk, skb, &drop_reason))
+			goto discard_and_relse;
 
 	th = (const struct tcphdr *)skb->data;
 	iph = ip_hdr(skb);
@@ -2305,6 +2358,11 @@ process:
 
 	skb->dev = NULL;
 
+	/*
+	 * 对于处于LISTEN状态下的套接口，内核调用tcp_v4_do_rcv来处理。由于LISTEN
+	 * 状态下的套接口的报文数据处理可以在用户锁定的情况下进行处理，因此不需要走
+	 * 下面的锁定检查。
+	 */
 	if (sk->sk_state == TCP_LISTEN) {
 		ret = tcp_v4_do_rcv(sk, skb);
 		goto put_and_return;
@@ -2377,9 +2435,10 @@ do_time_wait:
 					       &drop_reason);
 	switch (tw_status) {
 	case TCP_TW_SYN: {
-		struct sock *sk2 = inet_lookup_listener(net, skb, __tcp_hdrlen(th),
-							iph->saddr, th->source,
-							iph->daddr, th->dest,
+			/* 端口复用下，新SYN命中LISTEN时可接管并替换TW。 */
+			struct sock *sk2 = inet_lookup_listener(net, skb, __tcp_hdrlen(th),
+								iph->saddr, th->source,
+								iph->daddr, th->dest,
 							inet_iif(skb),
 							sdif);
 		if (sk2) {
@@ -2399,13 +2458,16 @@ do_time_wait:
 		fallthrough;
 	case TCP_TW_ACK:
 	case TCP_TW_ACK_OOW:
+		/* 发送ACK报文，比如收到了FIN报文的时候就要这么做。 */
 		tcp_v4_timewait_ack(sk, skb, tw_status);
 		break;
 	case TCP_TW_RST:
+		/* 重置连接。 */
 		tcp_v4_send_reset(sk, skb, SK_RST_REASON_TCP_TIMEWAIT_SOCKET);
 		inet_twsk_deschedule_put(inet_twsk(sk));
 		goto discard_it;
 	case TCP_TW_SUCCESS:;
+		/* 不做任何处理。 */
 	}
 	goto discard_it;
 }

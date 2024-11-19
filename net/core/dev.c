@@ -3377,6 +3377,12 @@ int netif_get_num_default_rss_queues(void)
 }
 EXPORT_SYMBOL(netif_get_num_default_rss_queues);
 
+/**
+ * 软中断中调度Qos，将q放到当前CPU的softnet_data->output_queue_tailp中，再
+ * 触发软中断。
+ *
+ * @param q
+ */
 static void __netif_reschedule(struct Qdisc *q)
 {
 	struct softnet_data *sd;
@@ -4168,6 +4174,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	tcf_set_drop_reason(skb, SKB_DROP_REASON_QDISC_DROP);
 
+	/* 判断Qos是否需要加锁运行，不需要的话就走里面的流程。 */
 	if (q->flags & TCQ_F_NOLOCK) {
 		if (q->flags & TCQ_F_CAN_BYPASS && nolock_qdisc_is_empty(q) &&
 		    qdisc_run_begin(q)) {
@@ -4192,10 +4199,12 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 			goto free_skbs;
 		}
 
+		/* 调用对应的Qos队列入方法，加入到对应队列。 */
 		rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
-		to_free2 = qdisc_run(q);
-		goto free_skbs;
-	}
+			/* 触发Qdisc运行并进入统一释放路径。 */
+			to_free2 = qdisc_run(q);
+			goto free_skbs;
+		}
 
 	/* Open code llist_add(&skb->ll_node, &q->defer_list) + queue limit.
 	 * In the try_cmpxchg() loop, we want to increment q->defer_count
@@ -4368,6 +4377,7 @@ static int tc_run(struct tcx_entry *entry, struct sk_buff *skb,
 	struct mini_Qdisc *miniq = rcu_dereference_bh(entry->miniq);
 	struct tcf_result res;
 
+    /* 判断是否启用了EGRESS队列 */
 	if (!miniq)
 		return ret;
 
@@ -4384,9 +4394,11 @@ static int tc_run(struct tcx_entry *entry, struct sk_buff *skb,
 	tcf_set_drop_reason(skb, *drop_reason);
 
 	mini_qdisc_bstats_cpu_update(miniq, skb);
+	/* tcf_classify用于运行TC队列。它会遍历并执行队列上的所有分类器。 */
 	ret = tcf_classify(skb, miniq->block, miniq->filter_list, &res, false);
 	/* Only tcf related quirks below. */
 	switch (ret) {
+	/* 根据EGRESS队列不同的返回值执行不同的操作，比如报文转发、丢弃等。 */
 	case TC_ACT_SHOT:
 		*drop_reason = tcf_get_drop_reason(skb);
 		mini_qdisc_qstats_cpu_drop(miniq);
@@ -4697,6 +4709,16 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
 {
 	int queue_index = 0;
 
+
+	/*
+	 * 该方法用于从网卡的发送队列中选取一个队列来发送，主要是针对支持多队列
+	 * 的网卡。
+	 *
+	 * 其中，XPS是一种负载均衡的手段，它用于将skb散列到特定的网卡队列上去，
+	 * 具体实现方式为：首先将网卡队列映射到特定的CPU上去，然后取出发送报文
+	 * 的CPU上所有队列，并skb进行hash计算，得到一个队列。
+	 */
+
 #ifdef CONFIG_XPS
 	u32 sender_cpu = skb->sender_cpu - 1;
 
@@ -4751,6 +4773,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	skb_reset_mac_header(skb);
 	skb_assert_len(skb);
 
+	/* 是否在报文调度期间生成软件时间戳 */
 	if (unlikely(skb_shinfo(skb)->tx_flags &
 		     (SKBTX_SCHED_TSTAMP | SKBTX_BPF)))
 		__skb_tstamp_tx(skb, NULL, NULL, skb->sk, SCM_TSTAMP_SCHED);
@@ -4765,6 +4788,11 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	qdisc_pkt_len_segs_init(skb);
 	tcx_set_ingress(skb, false);
 #ifdef CONFIG_NET_EGRESS
+	/*
+	 * 如果定义了EGRESS类型的队列，那么将其交给EGRESS处理。
+	 * 这种类型的队列不进行任何流量控制，单纯地为EBPFi留下
+	 * HOOK点而已。
+	 */
 	if (static_branch_unlikely(&egress_needed_key)) {
 		if (nf_hook_egress_active()) {
 			skb = nf_hook_egress(skb, &rc, dev);
@@ -4792,28 +4820,26 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	else
 		skb_dst_force(skb);
 
+	/*
+	 * 从网口队列选一个合适的netdev_queue进TC队列提交。
+	 * 注意一个网口可能有多个netdev_queue，每个队列都有
+	 * 一个TC队列。
+	 */
 	if (!txq)
 		txq = netdev_core_pick_tx(dev, skb, sb_dev);
 
 	q = rcu_dereference_bh(txq->qdisc);
 
 	trace_net_dev_queue(skb);
+	/* enqueue是Qos的入队函数 */
 	if (q->enqueue) {
 		rc = __dev_xmit_skb(skb, q, dev, txq);
 		goto out;
 	}
 
-	/* The device has no queue. Common case for software devices:
-	 * loopback, all the sorts of tunnels...
-
-	 * Really, it is unlikely that netif_tx_lock protection is necessary
-	 * here.  (f.e. loopback and IP tunnels are clean ignoring statistics
-	 * counters.)
-	 * However, it is possible, that they rely on protection
-	 * made by us here.
-
-	 * Check this and shot the lock. It is not prone from deadlocks.
-	 *Either shot noqueue qdisc, it is even simpler 8)
+	/*
+	 * 没有指定enqueue的话，说明当前往口上不需要进行Qos（比如回环设备等），
+	 * 因此直接对其进行发送。
 	 */
 	if (dev->flags & IFF_UP) {
 		int cpu = smp_processor_id(); /* ok because BHs are off */
@@ -5967,6 +5993,7 @@ another_round:
 
 	__this_cpu_inc(softnet_data.processed);
 
+	/* 首先将报文交给XDP模块进行处理 */
 	if (static_branch_unlikely(&generic_xdp_needed_key)) {
 		int ret2;
 
@@ -5981,6 +6008,7 @@ another_round:
 		}
 	}
 
+	/* 检查是否是VLAN报文，是的话就剥离vlan头部 */
 	if (eth_type_vlan(skb->protocol)) {
 		skb = skb_vlan_untag(skb);
 		if (unlikely(!skb))
@@ -5993,6 +6021,7 @@ another_round:
 	if (pfmemalloc)
 		goto skip_taps;
 
+	/* 将报文交给全局packet套接口链表处理。 */
 	list_for_each_entry_rcu(ptype, &dev_net_rcu(skb->dev)->ptype_all,
 				list) {
 		if (unlikely(pt_prev))
@@ -6000,6 +6029,7 @@ another_round:
 		pt_prev = ptype;
 	}
 
+	/* 将报文交给当前网口上的packet套接口处理。 */
 	list_for_each_entry_rcu(ptype, &skb->dev->ptype_all, list) {
 		if (unlikely(pt_prev))
 			ret = deliver_skb(skb, pt_prev, orig_dev);
@@ -6008,6 +6038,7 @@ another_round:
 
 skip_taps:
 #ifdef CONFIG_NET_INGRESS
+	/* 将报文交给TC的INGRESS处理。 */
 	if (static_branch_unlikely(&ingress_needed_key)) {
 		bool another = false;
 
@@ -6031,6 +6062,7 @@ skip_classify:
 		goto drop;
 	}
 
+	/* 将报文交给VLAN模块处理。 */
 	if (skb_vlan_tag_present(skb)) {
 		if (unlikely(pt_prev)) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
@@ -6042,6 +6074,7 @@ skip_classify:
 			goto out;
 	}
 
+	/* 检查当前网口上是否存在handler，如macvlan或者网桥等。 */
 	rx_handler = rcu_dereference(skb->dev->rx_handler);
 	if (rx_handler) {
 		if (unlikely(pt_prev)) {
@@ -6103,7 +6136,7 @@ check_vlan_id:
 
 	type = skb->protocol;
 
-	/* deliver only exact match when indicated */
+	/* 通过报文的三层协议，将报文交给对应的三层packet来处理。 */
 	if (likely(!deliver_exact)) {
 		deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
 				       &ptype_base[ntohs(type) &
@@ -6341,6 +6374,12 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 static int netif_receive_skb_internal(struct sk_buff *skb)
 {
 	int ret;
+
+	/*
+	 * 该函数主要用于RPS的处理，如果检查到当前网口开启了RPS支持，那么计算出对应的
+	 * 要散列到的CPU，并将其添加到其backlog队列中；否则，直接在本次进行当前skb
+	 * 的处理。
+	 */
 
 	net_timestamp_check(READ_ONCE(net_hotdata.tstamp_prequeue), skb);
 

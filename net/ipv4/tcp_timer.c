@@ -624,6 +624,7 @@ void tcp_retransmit_timer(struct sock *sk)
 			__NET_INC_STATS(sock_net(sk), mib_idx);
 	}
 
+	/* 先进入LOSS状态，再重传超时的报文（如果拥塞控制允许的话）。 */
 	tcp_enter_loss(sk);
 
 	tcp_update_rto_stats(sk);

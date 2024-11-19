@@ -169,6 +169,10 @@ static int raw_v4_input(struct net *net, struct sk_buff *skb,
 	int delivered = 0;
 	struct sock *sk;
 
+	/* RAW类型套接口的处理，如果找到了RAW套接口，那么对当前报文进行拷贝
+	 * 并传递给raw_rcv进行后续的处理。
+	 */
+
 	hlist = &raw_v4_hashinfo.ht[hash];
 	rcu_read_lock();
 	sk_for_each_rcu(sk, hlist) {

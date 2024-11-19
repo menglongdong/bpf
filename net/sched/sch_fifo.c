@@ -14,6 +14,13 @@
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 
+/* 
+ * 传统的fifo（先进先出）排队队列，有两种类型：pfifo，根据段数来进行缓冲区的限制；
+ * bfifo：根据比特来进行限制。
+ * 
+ * 该算法不会对报文进行任何处理，只是维护了一个队列，执行先进先出的策略。
+ */
+
 /* 1 band FIFO pseudo-"scheduler" */
 
 static int bfifo_enqueue(struct sk_buff *skb, struct Qdisc *sch,

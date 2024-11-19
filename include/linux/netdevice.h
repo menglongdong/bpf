@@ -3379,6 +3379,9 @@ u16 dev_pick_tx_zero(struct net_device *dev, struct sk_buff *skb,
 int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev);
 int __dev_direct_xmit(struct sk_buff *skb, u16 queue_id);
 
+/**
+ * 邻居子系统会调用该方法进行报文的发送，在neigh_outputg中被调用。
+ */
 static inline int dev_queue_xmit(struct sk_buff *skb)
 {
 	return __dev_queue_xmit(skb, NULL);

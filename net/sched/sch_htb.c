@@ -51,6 +51,17 @@
     one less than their parent.
 */
 
+/* 
+ * 基于令牌桶的有类排队队列。该排队队列与TBF类似，不同的是这个是有类的、有组织结构的。
+ * 
+ * 对于HTB类型的排队队列A，其存在两个子队列B、C，在B、C上走过报文时，不仅会消耗当前
+ * 排队队列的令牌，还会消耗父队列的令牌。如果当前令牌消耗完了（达到了速率上限），那么
+ * 是可以向父队列借令牌的，前提是父队列还有令牌。
+ * 
+ * 这种模式算是一种贪婪模式，即如果其他子队列存在空闲的令牌的话，那么会通过父队列被借
+ * 走。
+ */
+
 static int htb_hysteresis __read_mostly = 0; /* whether to use mode hysteresis for speedup */
 #define HTB_VER 0x30011		/* major must be matched with number supplied by TC as version */
 

@@ -251,9 +251,7 @@ static void tcp_fastopen_cookie_gen(struct sock *sk,
 	rcu_read_unlock();
 }
 
-/* If an incoming SYN or SYNACK frame contains a payload and/or FIN,
- * queue this additional data / FIN.
- */
+/* 该函数为fastopen状态下的tcp数据接收处理函数。 */
 void tcp_fastopen_add_skb(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -332,6 +330,13 @@ static struct sock *tcp_fastopen_create_child(struct sock *sk,
 	struct sock *child;
 	bool own_req;
 
+	/*
+	 * 调用tcp_v4_syn_recv_sock以完成了三次握手的方式创建sock。这里创建的
+	 * sock会被添加到hash表中，可以进行报文的接收。
+	 *
+	 * 此时，不会对req套接口进行关闭，而是保存下来，以防后面回退到正常的三次
+	 * 握手。
+	 */
 	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL,
 							 NULL, &own_req, NULL);
 	if (!child)
@@ -445,9 +450,26 @@ struct sock *tcp_try_fastopen(struct sock *sk, struct sk_buff *skb,
 	struct sock *child;
 	int ret = 0;
 
+	/*
+	 * 快速打开是一种需要频繁建立断开TCP连接的场景下进行性能提升的手段，其核心思想
+	 * 为：在TCP建链期间就进行数据的传输，减少了一次RTT。在首次建立TCP连接的时候，
+	 * 服务端会根据客户端IP返回一个加密的cookie。后面，在此需要建立TCP连接的时候
+	 * 客户端在SYN报文中携带这个cookie，并且携带报文数据。服务端在检查到这个
+	 * cookie的合法性后响应SYN+ACK数据，不等待收到ACK直接认为连接已经建立，
+	 * 开始进行数据的传输。其中，响应的SYN+ACK会对数据进行确认。
+	 *
+	 * 如果cookie校验失败，那么将其当做一个普通的SYN报文，只对该报文进行确认而
+	 * 不管其携带的数据。
+	 *
+	 * 注意：这里创建的套接口虽然可以进行数据的收发，但是仍然是处于SYN_RCV状态，
+	 * 并不是连接建立状态。
+	 */
+
+	/* 不存在cookie数据，说明当前是请求生成cookie。 */
 	if (foc->len == 0) /* Client requests a cookie */
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPFASTOPENCOOKIEREQD);
 
+	/* 合法性进行检查，包括fastopen队列长度是否超限、功能是否启用*/
 	if (!((tcp_fastopen & TFO_SERVER_ENABLE) &&
 	      (syn_data || foc->len >= 0) &&
 	      tcp_fastopen_queue_check(sk))) {
@@ -455,9 +477,14 @@ struct sock *tcp_try_fastopen(struct sock *sk, struct sk_buff *skb,
 		return NULL;
 	}
 
+	/*
+	 * 如果启用了“允许不存在cookie而进行数据发送，即强制启用fastopen”，
+	 * 那么不对cookie进行检查。方式有点暴力。
+	 */
 	if (tcp_fastopen_no_cookie(sk, dst, TFO_SERVER_COOKIE_NOT_REQD))
 		goto fastopen;
 
+	/* 对cookie的有效性进行检查。 */
 	if (foc->len == 0) {
 		/* Client requests a cookie. */
 		tcp_fastopen_cookie_gen(sk, req, skb, &valid_foc);
@@ -517,6 +544,7 @@ bool tcp_fastopen_cookie_check(struct sock *sk, u16 *mss,
 
 	dst = __sk_dst_get(sk);
 
+	/* 是否允许在没有cookie的情况下使用fastopen（激进的方式）。 */
 	if (tcp_fastopen_no_cookie(sk, dst, TFO_CLIENT_NO_COOKIE)) {
 		cookie->len = -1;
 		return true;
@@ -539,6 +567,14 @@ bool tcp_fastopen_defer_connect(struct sock *sk, int *err)
 	struct tcp_fastopen_cookie cookie = { .len = 0 };
 	struct tcp_sock *tp = tcp_sk(sk);
 	u16 mss;
+
+	/* 
+	 * 是否进行延迟连接，即如果当前套接口设置了FASTOPEN选项，并且fastopen的
+	 * cookie可用，那么此时不进行连接，而是等到发送数据的时候再发送SYN+DATA。
+	 * 
+	 * 否则的话，将会立刻进行SYN的发送。为了在SYN报文中包含cookie请求选项，
+	 * 这里会进行fastopen_req的分配。
+	 */
 
 	if (tp->fastopen_connect && !tp->fastopen_req) {
 		if (tcp_fastopen_cookie_check(sk, &mss, &cookie)) {

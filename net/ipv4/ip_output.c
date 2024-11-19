@@ -228,12 +228,20 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	}
 
 	rcu_read_lock();
+	/* 
+	 * 进行邻居项的查找。可以看出来，这里查找的时候使用的是路由缓存项的下一跳地址，
+	 * 而不是报文的目的地址，这是合理的。
+	 * 
+	 * 如果这个网口是一个回环设备，那么邻居查找总会成功，其下一跳被设置为ANY。
+	 */
 	neigh = ip_neigh_for_gw(rt, skb, &is_v6gw);
 	if (!IS_ERR(neigh)) {
 		int res;
 
+		/* 检查是否需要根据报文内容对邻居项进行一次确认。 */
 		sock_confirm_neigh(skb, neigh);
 		/* if crossing protocols, can not use the cached header */
+		/* 将报文交给邻居子系统来发送。 */
 		res = neigh_output(neigh, skb, is_v6gw);
 		rcu_read_unlock();
 		return res;
@@ -980,6 +988,15 @@ static int __ip_append_data(struct sock *sk,
 
 	skb = skb_peek_tail(queue);
 
+	/* 将msg中的数据添加到当前队列中。对于支持GSO的场景，MTU取最大IP报文长度，
+	 * 即0xFFFF；对于不支持的，采用常规的MTU。
+	 * 
+	 * 队列中，除了第一个skb封装了IP头部，其他skb都作为IP分片，只保留了头部的
+	 * 空间，并没有真正的设置头部。
+	 * 
+	 * 如果采用的是GSO模式，那么报文数据都存储在page中，即没有线性数据。
+	 */
+
 	exthdrlen = !skb ? rt->dst.header_len : 0;
 	mtu = cork->gso_size ? IP_MAX_MTU : cork->fragsize;
 	paged = !!cork->gso_size;
@@ -1126,6 +1143,12 @@ alloc_new_skb:
 
 			alloclen += alloc_extra;
 
+			/*
+			 * 对于支持TSO的设备或者采用page的场景，分配skb的时候会
+			 * 只为报文头部分配线性区内存，真正的报文数据采用page的
+			 * 方式。
+			 */
+
 			if (transhdrlen) {
 				skb = sock_alloc_send_skb(sk, alloclen,
 						(flags & MSG_DONTWAIT), &err);
@@ -1167,6 +1190,11 @@ alloc_new_skb:
 				pskb_trim_unique(skb_prev, maxfraglen);
 			}
 
+			/* 
+			 * 在进行数据拷贝的时候，对于使用了page的方式，copy会为0，
+			 * 因此不会调用getfrag进行数据拷贝。真正的数据拷贝会在后面
+			 * 进行。
+			 */
 			copy = datalen - transhdrlen - fraggap - pagedlen;
 			/* [!] NOTE: copy will be negative if pagedlen>0
 			 * because then the equation reduces to -fraggap.
@@ -1210,6 +1238,15 @@ alloc_new_skb:
 			continue;
 		}
 
+		/* 
+		 * 如果是零拷贝或者GSO方式，上面分配完skb后会在新的一轮循环中走到
+		 * 这里。
+		 * 
+		 * 对于不支持TSO的场景，且skb的线性区存在可用内存，那么直接进行
+		 * 报文数据的拷贝；否则，将报文数据拷贝到skb的分散聚合IO区。这是
+		 * 合理的，根据上面的判断如果不支持TSO，那么skb一定是用的线性区
+		 * 来进行报文数据存储，可用空间就一定够的。
+		 */
 		if (copy > length)
 			copy = length;
 
@@ -1411,6 +1448,12 @@ struct sk_buff *__ip_make_skb(struct sock *sk,
 	u8 pmtudisc, ttl;
 	__be16 df = 0;
 
+	/* 
+	 * 将队列中所有的IP片段合并成一个IP数据报，然后将其从队列中取出以进行发送。
+	 * 这里只有第一个报文的IP头部被构造了出来，其他报文的头部会在分片阶段进行
+	 * 构造。
+	 */
+
 	skb = __skb_dequeue(queue);
 	if (!skb)
 		goto out;
@@ -1561,6 +1604,11 @@ struct sk_buff *ip_make_skb(struct sock *sk,
 {
 	struct sk_buff_head queue;
 	int err;
+
+	/* 
+	 * 将报文数据使用__ip_append_data添加到发包队列中，并调用__ip_make_skb
+	 * 来将发包队列中的skb组成一个链表并返回。
+	 */
 
 	if (flags & MSG_PROBE)
 		return NULL;

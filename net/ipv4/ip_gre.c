@@ -654,6 +654,12 @@ static netdev_tx_t ipgre_xmit(struct sk_buff *skb,
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	const struct iphdr *tnl_params;
 
+	/* 
+	 * GRE的报文发送函数。该函数会先对报文进行封装，包括GRE头部的封装；然后对外部
+	 * 目的地址进行路由查找，找到后再封装外部IP头部，然后将其交给IP层来进行处理，
+	 * 即ip_output函数，该函数用于报文的发送。
+	 */
+
 	if (!pskb_inet_may_pull(skb))
 		goto free_skb;
 

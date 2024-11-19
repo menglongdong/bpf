@@ -558,9 +558,15 @@ struct ubuf_info_msgzc {
 			void *ctx;
 		};
 		struct {
+			/* uarg的唯一标识，通过sk->sk_zckey来递增获取 */
 			u32 id;
+			/* 代表数据个数，即每一次系统调用算是一个数据，这个len
+			 * 代表这当前uarg上传递了多少个系统调用传下来的数据。
+			 */
 			u16 len;
+			/* 是否启用零拷贝，如果硬件不支持SG，那么会不启用零拷贝。 */
 			u16 zerocopy:1;
+			/* 当前uarg对应的skb所携带的数据量 */
 			u32 bytelen;
 		};
 	};

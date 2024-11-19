@@ -471,12 +471,15 @@ static enum gro_result dev_gro_receive(struct gro_node *gro,
 	enum gro_result ret;
 	int same_flow;
 
+	/* 在网口未开启GRO支持或者网口上使用了XDP的情况下，不进行聚合，走常规路线。 */
 	if (netif_elide_gro(skb->dev))
 		goto normal;
 
+	/* 根据当前skb的hash值，从napi的hash表里获取skb链表。 */
 	gro_list_prepare(&gro_list->list, skb);
 
 	rcu_read_lock();
+	/* 对skb的一些GRO属性进行初始化，并调用当前skb的协议对应的GRO回调函数。 */
 	list_for_each_entry_rcu(ptype, head, list) {
 		if (ptype->type == type && ptype->callbacks.gro_receive)
 			goto found_ptype;
@@ -624,7 +627,9 @@ static gro_result_t gro_skb_finish(struct gro_node *gro, struct sk_buff *skb,
 gro_result_t gro_receive_skb(struct gro_node *gro, struct sk_buff *skb)
 {
 	gro_result_t ret;
+	/* NAPI模式下，网卡驱动中的POLL方法在分配好skb后会将其交给本函数处理。 */
 
+	/* 对当前报文设置NAPI的ID，该ID用于在网口handler处理过程中。 */
 	__skb_mark_napi_id(skb, gro);
 	trace_napi_gro_receive_entry(skb);
 
