@@ -2232,6 +2232,7 @@ struct net_device {
 
 	unsigned int		min_mtu;
 	unsigned int		max_mtu;
+	/* 这里的type像是当前nic对ARP的支持情况的type，比如ARPHRD_ETHER。 */
 	unsigned short		type;
 	unsigned char		min_header_len;
 	unsigned char		name_assign_type;

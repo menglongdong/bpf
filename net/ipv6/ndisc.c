@@ -1803,6 +1803,8 @@ enum skb_drop_reason ndisc_rcv(struct sk_buff *skb)
 	struct nd_msg *msg;
 	SKB_DR(reason);
 
+	/* IPv6的邻居发现NDP的处理逻辑。 */
+
 	if (ndisc_suppress_frag_ndisc(skb))
 		return SKB_DROP_REASON_IPV6_NDISC_FRAG;
 

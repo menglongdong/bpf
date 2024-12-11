@@ -204,6 +204,9 @@ static struct slave *__tlb_choose_channel(struct bonding *bond, u32 hash_index,
 	hash_table = bond_info->tx_hashtbl;
 	assigned_slave = hash_table[hash_index].tx_slave;
 	if (!assigned_slave) {
+		/* 如果当前的hash还没有绑定过任何的slave，就从slave中查找一个负载
+		 * 最低的，
+		 */
 		assigned_slave = tlb_get_least_loaded_slave(bond);
 
 		if (assigned_slave) {
@@ -667,6 +670,13 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 	struct slave *tx_slave = NULL;
 	struct net_device *dev;
 	struct arp_pkt *arp;
+
+	/* 在ALB发包的时候，如果是ARP协议，会调用这个函数来获取发送报文的slave。
+	 * 如果这个报文的源地址属于一个bridge网口，那么就不对其进行RLB的负载均衡。
+	 * 这种情况下会直接使用active_slave来作为bridge的arp信息。
+	 *
+	 * 这个过程中如果对ARP进行了RLB，那么
+	 */
 
 	if (!pskb_network_may_pull(skb, sizeof(*arp)))
 		return NULL;
@@ -1397,11 +1407,22 @@ struct slave *bond_xmit_tlb_slave_get(struct bonding *bond,
 	if (!is_multicast_ether_addr(eth_data->h_dest)) {
 		switch (skb->protocol) {
 		case htons(ETH_P_IPV6):
+			/* 对于IPv6的邻居发现报文，不进行LB，而是采用active_slave
+			 * 的方式进行发送，这个逻辑和ARP的处理逻辑是一致的。这里无论
+			 * 是NDP还是ARP，如果它不从active_slave发送出去，就会
+			 * 导致报文里的邻居信息和实际报文中的mac信息不一致，从而
+			 * 产生丢包。
+			 */
 			if (alb_determine_nd(skb, bond))
 				break;
 			fallthrough;
 		case htons(ETH_P_IP):
 			hash_index = bond_xmit_hash(bond, skb);
+			/* TLB和ALB支持动态LB的特性，默认开启的，基本原理为：将每个
+			 * slave哈希到一个数组中，流从这个数组中来进行slave的哈希。
+			 * 这样一来，就可以根据负载情况来修改某个slave对应的哈希的
+			 * 流。
+			 */
 			if (bond->params.tlb_dynamic_lb) {
 				tx_slave = tlb_choose_channel(bond,
 							      hash_index & 0xFF,
@@ -1429,6 +1450,9 @@ netdev_tx_t bond_tlb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 
 	/* TLB模式的发包函数，它首先根据哈希的方式从slaves中选择一个，然后调用
 	 * bond_do_alb_xmit进行报文的发送。
+	 *
+	 * 可以看出来，对于ARP报文，都是用的active_slave来响应的，这就代表着所有的
+	 * 收包都是会使用active_slave来承受。这个有点像是发包LB+收包的backup结合。
 	 */
 
 	tx_slave = bond_xmit_tlb_slave_get(bond, skb);
@@ -1446,6 +1470,10 @@ struct slave *bond_xmit_alb_slave_get(struct bonding *bond,
 	struct ethhdr *eth_data;
 	u32 hash_index = 0;
 	int hash_size = 0;
+
+	/* 这里的处理相对于TLB要复杂的很多，因为这里要对ARP进行拦截，也是实现收包
+	 * 负载均衡的地方。
+	 */
 
 	skb_reset_mac_header(skb);
 	eth_data = eth_hdr(skb);

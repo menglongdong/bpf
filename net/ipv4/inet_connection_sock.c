@@ -340,7 +340,7 @@ static bool inet_bhash2_addr_any_conflict(const struct sock *sk, int port, int l
 	reuseport_cb_ok = !reuseport_cb || READ_ONCE(reuseport_cb->num_closed_socks);
 	rcu_read_unlock();
 
-	/* 从bhash2中找到所有的ANY的套接口 */
+	/* 从bhash2中找到所有的当前family的ANY的套接口 */
 	head2 = inet_bhash2_addr_any_hashbucket(sk, net, port);
 
 	spin_lock(&head2->lock);
@@ -602,6 +602,8 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	 * 该函数的总体思路为：如果没有指定要绑定的端口，那么调用
 	 * inet_csk_find_open_port来从空闲端口中随机分配一个；否则，从BHASH表中
 	 * 进行查找，检测是否与现有绑定冲突。不冲突的话，将其绑定到BHASH表中。
+	 *
+	 * IPv6和IPv4调用的都是这个函数。
 	 */
 
 	l3mdev = inet_sk_bound_l3mdev(sk);
@@ -669,7 +671,9 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 		}
 
 		if (check_bind_conflict && inet_use_bhash2_on_bind(sk)) {
-			/* 这个sk绑定了地址，检查这个sk和ANY是否冲突 */
+			/* 这个sk绑定了地址，检查这个sk和ANY是否冲突。这里只检查
+			 * 和当前的family的any是否冲突。
+			 */
 			if (inet_bhash2_addr_any_conflict(sk, port, l3mdev, true, true))
 				goto fail_unlock;
 		}

@@ -64,6 +64,7 @@ struct inet_skb_parm {
 	u16			frag_max_size;
 };
 
+/* 判断这个报文是否来自vrf，在经过vrf的时候会被打上这个标志。 */
 static inline bool ipv4_l3mdev_skb(u16 flags)
 {
 	return !!(flags & IPSKB_L3SLAVE);
@@ -111,6 +112,7 @@ static inline void ipcm_init_sk(struct ipcm_cookie *ipcm,
 static inline int inet_sdif(const struct sk_buff *skb)
 {
 #if IS_ENABLED(CONFIG_NET_L3_MASTER_DEV)
+	/* 如果这个报文经过了vrf，那么这里的iif会被设置为对应的vrf网卡的index */
 	if (skb && ipv4_l3mdev_skb(IPCB(skb)->flags))
 		return IPCB(skb)->iif;
 #endif

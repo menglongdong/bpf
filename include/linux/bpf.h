@@ -1015,6 +1015,10 @@ enum bpf_reg_type {
 	 * additional context, assume the value is non-null.
 	 */
 	PTR_TO_BTF_ID,
+	/* 这个用的地方比较多，常规的用法是标注某个kfunc或者helper的返回值或者
+	 * 参数是一个指针，该指针指向一定长度的有效内存，其中长度大小通过元数据
+	 * 指定。其中，动态指针的机制就是基于这里实现的。
+	 */
 	PTR_TO_MEM,		 /* reg points to valid memory region */
 	PTR_TO_ARENA,
 	PTR_TO_BUF,		 /* reg points to a read/write buffer */

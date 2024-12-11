@@ -178,6 +178,9 @@ struct slave {
 	u32    link_failure_count;
 	u32    speed;
 	u16    queue_id;
+	/* 这个是slave原始的mac地址，对于可能会修改slave的mac地址的情况，这里会
+	 * 做备份。
+	 */
 	u8     perm_hwaddr[MAX_ADDR_LEN];
 	int    prio;
 	struct ad_slave_info *ad_info;
@@ -220,6 +223,7 @@ struct bonding {
 	struct   slave __rcu *curr_active_slave;
 	struct   slave __rcu *current_arp_slave;
 	struct   slave __rcu *primary_slave;
+	/* 当前可用的slave，对于8023D模式，会将某些数据传输有问题的slave标记为不可用 */
 	struct   bond_up_slave __rcu *usable_slaves;
 	struct   bond_up_slave __rcu *all_slaves;
 	bool     force_primary;

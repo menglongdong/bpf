@@ -66,6 +66,13 @@
 
 /* bond网口默认的模式，即采用RR的模式来进行负载均衡，轮流将报文发给各个slave。这种
  * 模式下，默认所有的slave连同bond都使用同一个mac地址。
+ *
+ * 这里slave的选取是根据packets_per_slave参数来决定的。如果
+ * 参数是0，那么就纯随机地选取slave；否则，每当slave处理完packets_per_slave
+ * 个报文后就轮转到下一个slave。
+ *
+ * 这里可以看出来，RR模式下，是不能保证同一个流的报文从同一个物理口出去的，这种不是
+ * 会出现很严重的乱序吗？
  */
 #define BOND_MODE_ROUNDROBIN	0
 /* backup的模式，一个网口出现故障后自动启用其他的网口。这种模式下，bond网口的mac
@@ -77,13 +84,27 @@
 #define BOND_MODE_XOR		2
 /* 广播模式（发给每一个网口），用于提升稳定性（冗余） */
 #define BOND_MODE_BROADCAST	3
+/* 基于8023AD协议的动态聚合模式，需要交换机的支持。 */
 #define BOND_MODE_8023AD        4
-/* 自适应发送负载均衡 */
+/* 自适应发送负载均衡。发生过程的负载均衡比较简单，就是单纯地通过哈希的方式来进行
+ * nic的选取。
+ *
+ * 可以看出来，对于ARP报文，都是用的active_slave来响应的，这就代表着所有的收包
+ * 都是会使用active_slave来承受。这个有点像是发包LB+收包的backup结合。
+ *
+ * bond口本身的mac地址是active_slave的，每个slave的mac地址都是不一样的。
+ *
+ * TLB和ALB支持动态LB的特性，默认开启的，基本原理为：将每个slave哈希到一个数组中，
+ * 流从这个数组中来进行slave的哈希。这样一来，就可以根据负载情况来修改某个slave
+ * 对应的哈希的流。
+ */
 #define BOND_MODE_TLB           5
 /* 自适应发送和接收负载均衡。发送过程中的负载均衡是使用哈希的方式来选取发送的nic
  * 来实现的。接收过程的负载均衡是通过拦截arp reply，并将reply中的源mac设置为
  * 较空闲的nic的mac来实现的。可以看出来，这个模式下，每个slave上的mac地址是不一样
  * 的。
+ *
+ * 这应该是唯一的一种收包方向的负载均衡，即对外表现的是一个IP有多个mac地址。
  */
 #define BOND_MODE_ALB		6 /* TLB + RLB (receive load balancing) */
 

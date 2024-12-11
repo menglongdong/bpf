@@ -367,6 +367,7 @@ static inline int compute_score(struct sock *sk, const struct net *net,
 			return -1;
 		score =  sk->sk_bound_dev_if ? 2 : 1;
 
+		/* 收到的是IPv4的报文，那么将优先使用IPv4的套接口。 */
 		if (sk->sk_family == PF_INET)
 			score++;
 		/*
@@ -442,7 +443,8 @@ static struct sock *inet_lhash2_lookup(const struct net *net,
 			 * 如果找到的sk启动了端口重用，那么以一种负载均衡的方式，从所有
 			 * 端口重用的套接口中挑一个listen的套接口。注意，这里不会
 			 * 查找处于EST状态的套接口。因此可以看出来，reuseport主要
-			 * 是针对listen套接口的。
+			 * 是针对listen套接口的。而且一旦端口开启了端口重用，那么就必定可以
+			 * 从重用的套接口中选取一个可用的套接口。
 			 */
 			result = inet_lookup_reuseport(net, sk, skb, doff,
 						       saddr, sport, daddr, hnum, inet_ehashfn);
@@ -565,6 +567,10 @@ struct sock *__inet_lookup_established(const struct net *net,
 	slot = hash & hashinfo->ehash_mask;
 	head = &hashinfo->ehash[slot];
 
+	/* 从哈希表中根据四元组来进行套接口的查找。如果是IPv6的套接口，那么其IPv4
+	 * 的地址会是空的。匹配过程中，没有对family进行检查，这就能匹配到family
+	 * 是AF_INET6的套接口，也就是IPv4 in IPv6.
+	 */
 begin:
 	sk_nulls_for_each_rcu(sk, node, &head->chain) {
 		if (sk->sk_hash != hash)
@@ -804,6 +810,8 @@ static int inet_reuseport_add_sock(struct sock *sk,
 	/* 端口重用（listen套接口放到一个重用组里）的条件：硬条件相同（协议、
 	 * 绑定的网口、绑定的端口）、源地址也要完全相同。这里可以看出来，
 	 * sock_reuseport里放的都是条件完全一致的套接口。
+	 *
+	 * 这里可以看出来，ipv4和ipv6的套接口不会放到同一个重用组里的。
 	 */
 	sk_nulls_for_each_rcu(sk2, node, &ilb->nulls_head) {
 		if (sk2 != sk &&
@@ -845,7 +853,15 @@ int inet_hash(struct sock *sk)
 			goto unlock;
 	}
 	sock_set_flag(sk, SOCK_RCU_FREE);
-	/* 将套接口加到lhash2表中 */
+	/* 将套接口加到lhash2表中。由于IPv4和IPv6是在同一个lhash中（这个还不一定，
+	 * 要看一下它的那个哈希算法，不过是可能在一起的），因此两者加入到哈希表中的
+	 * 顺序是有影响的。
+	 *
+	 * 在进行listen套接口查找的时候，如果查找到的套接口开启里端口重用，那么将
+	 * 不会再继续进行查找，而是从复用的端口中选取一个套接口来处理。那么如果
+	 * IPv6的套接口放到里前面，在收到IPv4报文的时候就会用IPv6的套接口来处理
+	 * 报文，而不是IPv4的套接口，这就造成了套接口查找的时候都一个优先级的问题。
+	 */
 	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
 		sk->sk_family == AF_INET6)
 		__sk_nulls_add_node_tail_rcu(sk, &ilb2->nulls_head);

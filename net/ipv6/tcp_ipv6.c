@@ -642,6 +642,9 @@ static int tcp_v6_parse_md5_keys(struct sock *sk, int optname,
 
 		rcu_read_lock();
 		dev = dev_get_by_index_rcu(sock_net(sk), cmd.tcpm_ifindex);
+		/* 这里是检查当前的网口是不是一个vrf设备，可以看出来vrf设备具有
+		 * 隔离md5的功能。
+		 */
 		if (dev && netif_is_l3_master(dev))
 			l3index = dev->ifindex;
 		rcu_read_unlock();

@@ -8351,6 +8351,9 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	/* Note: tcp_v6_init_req() might override ir_iif for link locals */
 	inet_rsk(req)->ir_iif = inet_request_bound_dev_if(sk, skb);
 
+	/* 这个里面会调用tcp_v4_init_req()来将req套接口的源地址和目的地址设置为
+	 * 当前报文里的IPv4地址。
+	 */
 	dst = af_ops->route_req(sk, skb, &fl, req, isn);
 	if (!dst)
 		goto drop_and_free;

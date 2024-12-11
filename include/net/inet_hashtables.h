@@ -99,6 +99,9 @@ struct inet_bind2_bucket {
 	int			l3mdev;
 	unsigned short		port;
 #if IS_ENABLED(CONFIG_IPV6)
+	/* IPv6的地址类型，如果是IPv4，那么这里会是IPV6_ADDR_MAPPED，下面的地址
+	 * 也会用最后32位保存IPv4的地址，并将它前面的两个字节设置为0xFFFF。
+	 */
 	unsigned short		addr_type;
 	struct in6_addr		v6_rcv_saddr;
 #define rcv_saddr		v6_rcv_saddr.s6_addr32[3]
@@ -168,7 +171,9 @@ struct inet_hashinfo {
 
 	/* 用来分配inet_bind_bucket的缓存 */
 	struct kmem_cache		*bind_bucket_cachep;
-	/* 端口绑定的HASH表，通过本地端口来进行哈希 */
+	/* 端口绑定的HASH表，通过本地端口来进行哈希。同一个端口的不同family的套接口
+	 * 也会被放到同一个bucket里的。
+	 */
 	struct inet_bind_hashbucket	*bhash;
 	struct kmem_cache		*bind2_bucket_cachep;
 	/* This bind table is hashed by local port and sk->sk_rcv_saddr (ipv4)
@@ -176,7 +181,14 @@ struct inet_hashinfo {
 	 * primarily for expediting bind conflict resolution.
 	 */
 	/* 根据本地端口和地址进行哈希绑定的哈希表。所有的绑定了端口的套接口都会
-	 * 被放到这个bucket里，所有的bhash2都会被放到对应的bhash中。
+	 * 被放到这个bucket里，所有的bhash2都会被放到对应的bhash中。这个里面放的
+	 * bucket类型是inet_bind2_bucket。
+	 *
+	 * IPv4的套接口也可以放到這個bucket里，这个是通过IPv6 -> IPv4的map来实现
+	 * 的，具体可以看inet_bind2_bucket_create的实现逻辑。然而，监听同样的
+	 * 端口，IPv4和IPv6的套接口不会放到同一个bucket里，这个可以通过
+	 * inet_bind2_bucket_find的实现看出来。即使是ANY地址，IPv4和IPv6也是
+	 * 放在里不同的bucket里。
 	 */
 	struct inet_bind_hashbucket	*bhash2;
 	unsigned int			bhash_size;
@@ -375,6 +387,7 @@ static inline bool inet_match(const struct net *net, const struct sock *sk,
 			      const __addrpair cookie, const __portpair ports,
 			      int dif, int sdif)
 {
+	/* 这里就是匹配端口和地址四元组 */
 	if (!net_eq(sock_net(sk), net) ||
 	    READ_ONCE(sk->sk_portpair) != ports ||
 	    sk->sk_addrpair != cookie)
