@@ -2018,6 +2018,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	bond_hw_addr_copy(new_slave->perm_hwaddr, slave_dev->dev_addr,
 			  slave_dev->addr_len);
 
+	/* 没看明白这里的逻辑，看样子是非backup模式的，slave的mac就是master的？ */
 	if (!bond->params.fail_over_mac ||
 	    BOND_MODE(bond) != BOND_MODE_ACTIVEBACKUP) {
 		/* Set slave to master's mac address.  The application already
@@ -2079,6 +2080,9 @@ skip_mac_set:
 	new_slave->delay = 0;
 	new_slave->link_failure_count = 0;
 
+	/* 检查是否能够通过ethtool获取网卡的speed等信息。对于需要知道该信息的模式，如
+	 * 3ad，那么就将这个slave设置为DOWN。
+	 */
 	if (bond_update_speed_duplex(new_slave) &&
 	    bond_needs_speed_duplex(bond))
 		new_slave->link = BOND_LINK_DOWN;

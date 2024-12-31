@@ -64,6 +64,19 @@
 
 #define BOND_CHECK_MII_STATUS	(SIOCGMIIPHY)
 
+/*
+ * 各个模式的以太网通道（需要交换机支持）情况：
+ * 0 - balance-rr 	Requires static Etherchannel enabled (not LACP-negotiated)
+ * 1 - active-backup 	Requires autonomous ports
+ * 2 - balance-xor 	Requires static Etherchannel enabled (not LACP-negotiated)
+ * 3 - broadcast 	Requires static Etherchannel enabled (not LACP-negotiated)
+ * 4 - 802.3ad 	Requires LACP-negotiated Etherchannel enabled
+ * 5 - balance-tlb 	Requires autonomous ports
+ * 6 - balance-alb 	Requires autonomous ports
+ *
+ * https://www.tutorialspoint.com/etherchannel-in-computer-network
+ */
+
 /* bond网口默认的模式，即采用RR的模式来进行负载均衡，轮流将报文发给各个slave。这种
  * 模式下，默认所有的slave连同bond都使用同一个mac地址。
  *
@@ -84,7 +97,11 @@
 #define BOND_MODE_XOR		2
 /* 广播模式（发给每一个网口），用于提升稳定性（冗余） */
 #define BOND_MODE_BROADCAST	3
-/* 基于8023AD协议的动态聚合模式，需要交换机的支持。 */
+/* 基于8023AD协议的动态聚合模式，需要交换机的支持。发包的时候完全根据报文的哈希来从可用的
+ * slave中选取发包slave，通过动态聚合的协议来动态地决定哪些slave是可用的。
+ *
+ * 这个模式下，所有的slave以及bond的mac地址都是一样的。
+ */
 #define BOND_MODE_8023AD        4
 /* 自适应发送负载均衡。发生过程的负载均衡比较简单，就是单纯地通过哈希的方式来进行
  * nic的选取。
@@ -109,9 +126,13 @@
 #define BOND_MODE_ALB		6 /* TLB + RLB (receive load balancing) */
 
 /* each slave's link has 4 states */
+/* slave处于可用状态，这也是默认的slave的初始状态 */
 #define BOND_LINK_UP    0           /* link is up and running */
+/* slave处于不可用的状态，比如down或者no-carrier状态 */
 #define BOND_LINK_FAIL  1           /* link has just gone down */
+/* 由于某些原因，slave不可用，比如3ad模式下无法获取slave的speed */
 #define BOND_LINK_DOWN  2           /* link has been down for too long time */
+/* 对于延迟UP的情况，在UP之前，就是处于这种BACK模式 */
 #define BOND_LINK_BACK  3           /* link is going back */
 
 /* each slave has several states */
