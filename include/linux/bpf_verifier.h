@@ -359,6 +359,7 @@ struct bpf_func_state {
 	/* Size of the current stack, in bytes. The stack state is tracked below, in
 	 * `stack`. allocated_stack is always a multiple of BPF_REG_SIZE.
 	 */
+	/* 跟踪到的当前栈上已经分配的内存，就是跟踪写数据的过程来实现的。 */
 	int allocated_stack;
 };
 

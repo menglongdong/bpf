@@ -8026,10 +8026,16 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			err = check_stack_write(env, regno, off, size,
 						value_regno, insn_idx);
 	} else if (reg_is_pkt_pointer(reg)) {
+		/* 对于网络报文数据的访问，检查是否可以进行写操作。这里对于某些
+		 * 类型的BPF程序，是只能读取报文数据的。
+		 */
 		if (t == BPF_WRITE && !may_access_direct_pkt_data(env, NULL, t)) {
 			verbose(env, "cannot write into packet\n");
 			return -EACCES;
 		}
+		/* 写数据的时候，不能将指针类型的数据存储到报文数据中。这里难道是
+		 * 为了防止信息泄露？
+		 */
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
 			verbose(env, "R%d leaks addr into packet\n",
