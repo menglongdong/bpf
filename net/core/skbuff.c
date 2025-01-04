@@ -2661,6 +2661,9 @@ EXPORT_SYMBOL_GPL(pskb_put);
  */
 void *skb_put(struct sk_buff *skb, unsigned int len)
 {
+	/* 线性区尾部开辟空间，即将tail指针进行移动，报文长度进行增加，开辟一段真正的数据区。
+	 * 然后这里返回的是新开辟出来的那段空间的地址。
+	 */
 	void *tmp = skb_tail_pointer(skb);
 	SKB_LINEAR_ASSERT(skb);
 	skb->tail += len;

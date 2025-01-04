@@ -3172,6 +3172,7 @@ static inline unsigned char *skb_network_header(const struct sk_buff *skb)
 	return skb->head + skb->network_header;
 }
 
+/* 将当前skb的data指针设置为L3的头部 */
 static inline void skb_reset_network_header(struct sk_buff *skb)
 {
 	long offset = skb->data - skb->head;

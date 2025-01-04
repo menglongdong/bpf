@@ -1093,6 +1093,7 @@ EXPORT_SYMBOL(__nla_put_nohdr);
  */
 int nla_put(struct sk_buff *skb, int attrtype, int attrlen, const void *data)
 {
+	/* 向skb尾部开辟一段可用的数据内存，并将对应的数据按照一定格式存放进去。 */
 	if (unlikely(skb_tailroom(skb) < nla_total_size(attrlen)))
 		return -EMSGSIZE;
 

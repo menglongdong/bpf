@@ -2488,10 +2488,11 @@ void netlink_ack(struct sk_buff *in_skb, struct nlmsghdr *nlh, int err,
 	unsigned int flags = 0;
 	size_t tlvlen;
 
-	/* Error messages get the original request appended, unless the user
-	 * requests to cap the error message, and get extra error data if
-	 * requested.
-	 */
+		/* 该函数将应答信息放入 netlink 错误队列，主体数据为 nlmsgerr。 */
+		/* Error messages get the original request appended, unless the user
+		 * requests to cap the error message, and get extra error data if
+		 * requested.
+		 */
 	if (err && !test_bit(NETLINK_F_CAP_ACK, &nlk->flags))
 		payload += nlmsg_len(nlh);
 	else
