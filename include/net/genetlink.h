@@ -550,6 +550,7 @@ int genlmsg_multicast_allns(const struct genl_family *family,
  */
 static inline int genlmsg_unicast(struct net *net, struct sk_buff *skb, u32 portid)
 {
+	/* 这个函数用于向指定的进程发送单播消息。 */
 	return nlmsg_unicast(net->genl_sock, skb, portid);
 }
 

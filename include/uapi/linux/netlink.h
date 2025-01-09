@@ -40,7 +40,9 @@
 struct sockaddr_nl {
 	__kernel_sa_family_t	nl_family;	/* AF_NETLINK	*/
 	unsigned short	nl_pad;		/* zero		*/
-	/* 发送单播的情况 */
+	/* 发送单播的情况，netlink套接口绑定的时候指定的portid，如果不指定，
+	 * 会随机给分配一个？
+	 */
 	__u32		nl_pid;		/* port ID	*/
 	/* 发送多播的情况 */
        	__u32		nl_groups;	/* multicast groups mask */

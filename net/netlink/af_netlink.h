@@ -44,6 +44,7 @@ struct netlink_sock {
 	unsigned long		state;
 	size_t			max_recvmsg_len;
 	wait_queue_head_t	wait;
+	/* 当前netlink套接口是否进行了端口绑定 */
 	bool			bound;
 	bool			cb_running;
 	int			dump_done_errno;

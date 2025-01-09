@@ -619,6 +619,14 @@ static int __init_memblock memblock_add_range(struct memblock_type *type,
 	if (!size)
 		return 0;
 
+	/* 这里的regions维护了一个数组，保存了所有的当前类型的物理地址范围。如果第一个
+	 * region为空，说明还没有range，这个时候可以直接将当前的地址范围放入到第一个
+	 * region。
+	 *
+	 * 如果当前的regions已经有了，那么就对其进行遍历，从而将当前的region按照从小到大
+	 * 的顺序放到这个regions数组中的。
+	 */
+
 	/* special case for empty array */
 	if (type->regions[0].size == 0) {
 		WARN_ON(type->cnt != 0 || type->total_size);
@@ -883,6 +891,7 @@ static int __init_memblock memblock_remove_range(struct memblock_type *type,
 	return 0;
 }
 
+/* 将某一段的物理内存从某个类型的regions中移除 */
 int __init_memblock memblock_remove(phys_addr_t base, phys_addr_t size)
 {
 	phys_addr_t end = base + size - 1;
@@ -926,6 +935,7 @@ int __init_memblock memblock_phys_free(phys_addr_t base, phys_addr_t size)
 	return memblock_remove_range(&memblock.reserved, base, size);
 }
 
+/* 将一段物理内存加入到预留地址领域 */
 int __init_memblock __memblock_reserve(phys_addr_t base, phys_addr_t size,
 				       int nid, enum memblock_flags flags)
 {

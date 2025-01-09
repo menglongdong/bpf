@@ -1034,6 +1034,7 @@ static int netlink_bind(struct socket *sock, struct sockaddr_unsized *addr,
 	 * using any of the bound attributes.
 	 */
 	netlink_lock_table();
+	/* 如果没有进行端口，那么这里会绑定指定的端口，或者随机分配一个端口。 */
 	if (!bound) {
 		err = nladdr->nl_pid ?
 			netlink_insert(sk, nladdr->nl_pid) :
@@ -1344,6 +1345,13 @@ int netlink_unicast(struct sock *ssk, struct sk_buff *skb,
 
 	timeo = sock_sndtimeo(ssk, nonblock);
 retry:
+	/* 这里参数中的ssk代表的是用来进行消息发送的套接口，一般是内核中的套接口。而sk
+	 * 是目的套接口，一般是用户态套接口。这里是根据portid来找到对应的用户态套接口。
+	 * 这里的portid一般都会设置为进程的pid。
+	 *
+	 * 这里可以看出来，对于同一个netlink协议，每个套接口的portid是唯一的，因此这里
+	 * 找到的套接口是唯一确定的。
+	 */
 	sk = netlink_getsockbyportid(ssk, portid);
 	if (IS_ERR(sk)) {
 		kfree_skb(skb);

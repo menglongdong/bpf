@@ -452,6 +452,8 @@ static int cmd_attr_register_cpumask(struct genl_info *info)
 	cpumask_var_t mask;
 	int rc;
 
+	/* 这里会将info中的进程的id加入到指定的CPU上的listener_array链表中。 */
+
 	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
 		return -ENOMEM;
 	rc = parse(info->attrs[TASKSTATS_CMD_ATTR_REGISTER_CPUMASK], mask);
