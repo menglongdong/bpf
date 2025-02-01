@@ -117,6 +117,7 @@ struct inet_connection_sock {
 	__u8			  icsk_probes_out;
 	__u16			  icsk_ext_hdr_len;
 	struct {
+		/* 在发送完成某个ACK的时候，会在tcp_event_ack_sent函数中对这个值进行清空 */
 		__u8		  pending;	 /* ACK is pending			   */
 		__u8		  quick;	 /* Scheduled number of quick acks	   */
 		__u8		  pingpong;	 /* The session is interactive		   */

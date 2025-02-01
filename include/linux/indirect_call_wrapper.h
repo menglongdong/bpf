@@ -14,6 +14,9 @@
  * eventually invoking directly the builtin function. The functions are checked
  * in the given order. Fallback to the indirect call.
  */
+/* 这里是用来提升性能的。对于direct call，编译器是可以对其进行内联的。这里相当于变相地将
+ * 将对函数指针的调用转为了direct call，允许编译器或者分支预测等功能对其进行优化。
+ */
 #define INDIRECT_CALL_1(f, f1, ...)					\
 	({								\
 		typeof(f) __f1 = (f);					\

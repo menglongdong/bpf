@@ -1808,6 +1808,7 @@ config FUNCTION_ALIGNMENT_32B
 config FUNCTION_ALIGNMENT_64B
 	bool
 
+# 函数对齐字节数，基于GCC的-fmin-function-alignment或者-falign-functions来实现。
 config FUNCTION_ALIGNMENT
 	int
 	default 64 if FUNCTION_ALIGNMENT_64B
