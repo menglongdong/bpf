@@ -81,6 +81,9 @@ struct netns_ipv4 {
 	u8 sysctl_tcp_moderate_rcvbuf;
 	u8 sysctl_ip_early_demux;
 	u8 sysctl_tcp_early_demux;
+	/* 这个参数决定了在使用VRF网卡的时候，VRF网卡收上来的报文能不能被global套接口
+	 * 匹配到。
+	 */
 	u8 sysctl_tcp_l3mdev_accept;
 	/* 3 bytes hole, try to pack */
 	int sysctl_tcp_reordering;

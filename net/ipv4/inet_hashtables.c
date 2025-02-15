@@ -445,6 +445,12 @@ static struct sock *inet_lhash2_lookup(const struct net *net,
 			 * 查找处于EST状态的套接口。因此可以看出来，reuseport主要
 			 * 是针对listen套接口的。而且一旦端口开启了端口重用，那么就必定可以
 			 * 从重用的套接口中选取一个可用的套接口。
+			 *
+			 * 这里会存在一个问题，就是可能会命中低优先级的套接口。比如，
+			 * 套接口A, B, C分别开启了端口重用，且绑定了同一个端口，其中
+			 * A是IPv6，C绑定了网口X，虽然这三个套接口不会被放到同一个
+			 * 重用组，但是这里如果是X收到的IPv4报文，是可能命中B套接口的。
+			 * 这里由于IPv6做了优化，因此不会命中A套接口。
 			 */
 			result = inet_lookup_reuseport(net, sk, skb, doff,
 						       saddr, sport, daddr, hnum, inet_ehashfn);

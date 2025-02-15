@@ -2414,10 +2414,11 @@ config FUNCTION_PADDING_CFI
 # Basically: FUNCTION_ALIGNMENT - 5*CFI
 # except Kconfig can't do arithmetic :/
 
-# 函数对齐的字节数，默认情况下是： (FUNCTION_ALIGNMENT - 5 * CFI_CLANG)。如果启用
+# 函数预留的字节数，默认情况下是： (FUNCTION_ALIGNMENT - 5 * CFI_CLANG)。如果启用
 # 了CFI_CLANG，函数本身就会有5个字节的预留空间，所以PADDING就要变成了11个字节了，这样
 # 真正的函数头部就会是16字节对齐。
-# 这个功能是基于GCC的-fpatchable-function-entry选项来实现的。
+# 这个功能是基于GCC的-fpatchable-function-entry选项来实现的。这个和-falign-functions
+# 是独立的，就是这个空间也会被当成函数的一部分，总体上进行对齐操作。
 config FUNCTION_PADDING_BYTES
 	int
 	default FUNCTION_PADDING_CFI if CFI
