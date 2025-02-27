@@ -62,12 +62,16 @@ int ftrace_regs_query_register_offset(const char *name)
 
 unsigned long ftrace_call_adjust(unsigned long addr)
 {
+	/* 看样子mrecord里存的地址是原始的函数地址，而不是真实的地址，即包括了
+	 * function padding的函数地址。
+	 */
+
 	/*
 	 * When using mcount, addr is the address of the mcount call
 	 * instruction, and no adjustment is necessary.
 	 */
 	if (!IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_ARGS))
-		return addr;
+		goto out;
 
 	/*
 	 * When using patchable-function-entry without pre-function NOPS, addr
@@ -88,8 +92,10 @@ unsigned long ftrace_call_adjust(unsigned long addr)
 	 * to `BL <caller>`, which is at `addr + 4` bytes in either case.
 	 *
 	 */
-	if (!IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS))
-		return addr + AARCH64_INSN_SIZE;
+	if (!IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS)) {
+		addr += AARCH64_INSN_SIZE;
+		goto out;
+	}
 
 	/*
 	 * When using patchable-function-entry with pre-function NOPs, addr is
@@ -139,7 +145,9 @@ unsigned long ftrace_call_adjust(unsigned long addr)
 
 	/* Skip the first NOP after function entry */
 	addr += AARCH64_INSN_SIZE;
-
+out:
+	if (IS_ENABLED(CONFIG_FUNCTION_METADATA))
+		addr += 2 * AARCH64_INSN_SIZE;
 	return addr;
 }
 
@@ -358,6 +366,7 @@ static const struct ftrace_ops *arm64_rec_get_ops(struct dyn_ftrace *rec)
 {
 	const struct ftrace_ops *ops = NULL;
 
+	/* 返回对应的函数有且仅有一条的ops处理函数 */
 	if (rec->flags & FTRACE_FL_CALL_OPS_EN) {
 		ops = ftrace_find_unique_ops(rec);
 		WARN_ON_ONCE(!ops);
@@ -372,6 +381,9 @@ static const struct ftrace_ops *arm64_rec_get_ops(struct dyn_ftrace *rec)
 static int ftrace_rec_set_ops(const struct dyn_ftrace *rec,
 			      const struct ftrace_ops *ops)
 {
+	/* 这里跳过了ip前面的一个NOP，再跳过function前面2个NOP，所以是减去12，拿到的
+	 * 是存放ops的padding的地址。
+	 */
 	unsigned long literal = ALIGN_DOWN(rec->ip - 12, 8);
 	return aarch64_insn_write_literal_u64((void *)literal,
 					      (unsigned long)ops);

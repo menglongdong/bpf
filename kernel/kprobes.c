@@ -1537,6 +1537,7 @@ _kprobe_addr(kprobe_opcode_t *addr, const char *symbol_name,
 	 * magical function entry details while telling us if this was indeed
 	 * at the start of the function.
 	 */
+	/* 对于x86，这里会跳过endbr指令，即会进行：addr += 4的操作。 */
 	addr = arch_adjust_kprobe_addr((unsigned long)addr, offset, on_func_entry);
 	if (!addr)
 		return ERR_PTR(-EINVAL);

@@ -162,7 +162,12 @@ int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 	unsigned long ip = rec->ip;
 	const char *new, *old;
 
+	/* X86架构下修改function的fentry的函数，这里会先获取NOP指令，然后将对应的地址
+	 * 处的NOP指令替换为对应的CALL指令，这个是在ftrace_modify_code_direct中
+	 * 进行的。
+	 */
 	old = ftrace_nop_replace();
+	/* 获取新的指令 */
 	new = ftrace_call_replace(ip, addr);
 
 	/* Should only be called when module is loaded */

@@ -786,6 +786,15 @@ enum {
 struct dyn_ftrace {
 	/* mcount指令的地址。该指令一般不在函数的起始位置（不像__fentry__），而是在
 	 * 栈帧初始化指令之后。
+	 *
+	 * 如果是基于fentry或者fpatchable的，那么这个地址就会指向真实的要被替换的NOP
+	 * 指令的地址。
+	 *
+	 * 在ftrace_process_locs里面，会将保存到vmlinux中的对应段中的信息提取到这个
+	 * 字段，其中的段中存储的只有一个地址信息。
+	 *
+	 * 这里的地址是处理过的，即指向了真正的产生call的那条指令，即需要被ftrace修改
+	 * 的那条指令。
 	 */
 	unsigned long		ip; /* address of mcount call-site */
 	unsigned long		flags;

@@ -1154,6 +1154,7 @@ struct ftrace_page {
 #define ENTRY_SIZE sizeof(struct dyn_ftrace)
 #define ENTRIES_PER_PAGE_GROUP(order) ((PAGE_SIZE << (order)) / ENTRY_SIZE)
 
+/* mrecord开始的地方 */
 static struct ftrace_page	*ftrace_pages_start;
 static struct ftrace_page	*ftrace_pages;
 
@@ -7599,6 +7600,9 @@ static int ftrace_process_locs(struct module *mod,
 	unsigned long pages;
 	int ret = -ENOMEM;
 
+	/* record的数量，可以看出来每个record占用了8个字节，也就是说每个record代表
+	 * 一个指针。
+	 */
 	count = end - start;
 
 	if (!count)
@@ -7616,6 +7620,7 @@ static int ftrace_process_locs(struct module *mod,
 		test_is_sorted(start, count);
 	}
 
+	/* 根据 record 数量分配对应页链表。 */
 	start_pg = ftrace_allocate_pages(count, &pages);
 	if (!start_pg)
 		return -ENOMEM;
