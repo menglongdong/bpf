@@ -461,6 +461,9 @@ int ftrace_modify_call(struct dyn_ftrace *rec, unsigned long old_addr,
  * Note: ftrace_process_locs() has pre-adjusted rec->ip to be the address of
  * the BL.
  */
+/* 这个函数是用来初始化函数中插入的NOP（或者call __fentry__）指令的。对于arm64，不是
+ * 通过-fentry来实现的，而是直接通过padding来实现的。
+ */
 int ftrace_init_nop(struct module *mod, struct dyn_ftrace *rec)
 {
 	unsigned long pc = rec->ip - AARCH64_INSN_SIZE;
