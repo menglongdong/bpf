@@ -2759,6 +2759,10 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	void __user *usyms;
 	int err;
 
+	/* 这里首先根据用户传递进来的参数信息来进行数据的初始化，包括获取函数的
+	 * 个数和根据符号查找来获取每个函数的地址等信息。
+	 */
+
 	/* no support for 32bit archs yet */
 	if (sizeof(u64) != sizeof(void *))
 		return -EOPNOTSUPP;
@@ -2858,6 +2862,9 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	if (is_kprobe_session(prog))
 		link->fp.entry_data_size = sizeof(u64);
 
+	/* 初始化kprobe.multi相关的信息，包括地址数组、cookie数组等。然后获取
+	 * 每个函数对应的内核模块的引用，防止符号被释放。
+	 */
 	link->addrs = addrs;
 	link->cookies = cookies;
 	link->cnt = cnt;

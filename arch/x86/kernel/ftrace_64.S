@@ -79,6 +79,7 @@
 	/*
 	 * We add enough stack to save all regs.
 	 */
+	/* 开辟pt_regs的空间，保存所有需要保存的寄存器，清空origin_rax内容 */
 	subq $(FRAME_SIZE), %rsp
 	movq %rax, RAX(%rsp)
 	movq %rcx, RCX(%rsp)
@@ -100,9 +101,11 @@
 	movq %rdx, RBP(%rsp)
 
 	/* Copy the parent address into %rsi (second parameter) */
+	/* 将目标函数的调用者（caller）的地址保存到rsi寄存器（第二个参数）中 */
 	movq MCOUNT_REG_SIZE+8+\added(%rsp), %rsi
 
 	 /* Move RIP to its proper location */
+	/* 将栈中原始的rip信息拷贝到pt_regs中 */
 	movq MCOUNT_REG_SIZE+\added(%rsp), %rdi
 	movq %rdi, RIP(%rsp)
 
@@ -111,6 +114,7 @@
 	 * where ftrace_call returns. But the callbacks expect the
 	 * address of the call itself.
 	 */
+	/* 将rdi（第一个参数）的值修正为函数（目标函数）逻辑上的地址 */
 	subq $MCOUNT_INSN_SIZE, %rdi
 	.endm
 
@@ -202,6 +206,12 @@ SYM_INNER_LABEL(ftrace_caller_end, SYM_L_GLOBAL)
 SYM_FUNC_END(ftrace_caller);
 STACK_FRAME_NON_STANDARD_FP(ftrace_caller)
 
+/* 基于regs的TRAMPOLINE。这种trampoline不会被直接使用，而是会在注册ftrace_ops的时候
+ * 为每个ops动态创建一个trampoline，并将这个trampoline里的一些信息修正为这个ops上的
+ * 信息。当某个函数上存在多个ops的时候，就会启用ftrace_ops_list这个callback。这是一种
+ * fallback的低效的处理方式，因为它会编译所有的ops，并比对当前的函数的ip和每个ops对应的
+ * ip_hash，在命中的时候再执行对应的ops。
+ */
 SYM_FUNC_START(ftrace_regs_caller)
 	ANNOTATE_NOENDBR
 	/* 这一段是保存一些ftrace本身的信息 */
@@ -209,18 +219,33 @@ SYM_FUNC_START(ftrace_regs_caller)
 	pushfq
 
 	/* added 8 bytes to save flags */
+	/* 将寄存器中按照ptrace-abi.h中的格式保存到栈中。这里的8代表着，当前栈帧
+	 * 中的数据，这个宏需要这个信息来拿到返回地址的值。
+	 *
+	 * 当前栈帧的状态为：
+	 *   rip	-	8，caller的下一条指令的地址
+	 *   ------------------------------------
+	 *   rip	-	8，目标函数地址+4
+	 *   flag	-	8
+	 *   pt_regs	-	FRAME_SIZE（168）
+	 */
 	save_mcount_regs 8
 	/* save_mcount_regs fills in first two parameters */
 
 	CALL_DEPTH_ACCOUNT
 
 SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
+	/* 这个宏像是一个编译器注释宏，注释这个函数不能被trace，以及没有endbr */
 	ANNOTATE_NOENDBR
 	/* Load the ftrace_ops into the 3rd parameter */
+	/* 把callback对应的ftrace_ops放到第三个传参寄存器中。这个指令也是会在runtime
+	 * 被替换的。
+	 */
 	movq function_trace_op(%rip), %rdx
 
 	/* 将寄存器中的值按照pt_regs的格式保存到栈中，rsp是pt_regs的起始地址。
-	 * 这一端是做调用ops前的准备工作，把各种参数都准备好，然后调用ops
+	 * 这一端是做调用ops前的准备工作，把各种参数都准备好，然后调用ops。这里
+	 * 保存的是那些callee不需要保存的寄存器。
 	 */
 	/* Save the rest of pt_regs */
 	movq %r15, R15(%rsp)
@@ -230,21 +255,24 @@ SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
 	movq %r11, R11(%rsp)
 	movq %r10, R10(%rsp)
 	movq %rbx, RBX(%rsp)
-	/* Copy saved flags */
+	/* 把我们push到栈里的寄存器flags保存到pt_regs中 */
 	movq MCOUNT_REG_SIZE(%rsp), %rcx
 	movq %rcx, EFLAGS(%rsp)
-	/* Kernel segments */
+	/* 把内核Kernel segments保存到pt_regs中的SS字段中（常量，有啥用？） */
 	movq $__KERNEL_DS, %rcx
 	movq %rcx, SS(%rsp)
 	movq $__KERNEL_CS, %rcx
+	/* 类似SS */
 	movq %rcx, CS(%rsp)
 	/* Stack - skipping return address and flags */
+	/* 把caller的地址放到了pt_regs的rsp寄存器中 */
 	leaq MCOUNT_REG_SIZE+8*2(%rsp), %rcx
 	movq %rcx, RSP(%rsp)
 
 	ENCODE_FRAME_POINTER
 
 	/* regs go into 4th parameter */
+	/* 把pt_regs放到第四个传参寄存器中 */
 	leaq (%rsp), %rcx
 
 	/* Account for the function call below */
@@ -253,6 +281,9 @@ SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
 SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	/* 这一段是真正的要调用ops函数的地方 */
 	ANNOTATE_NOENDBR
+	/* 这里的ftrace_stub会被动态地修改为真正的callback对应的处理函数，上面的
+	 * 那四个参数会被传递给这个callback函数。
+	 */
 	call ftrace_stub
 
 	/* Copy flags back to SS, to restore them */
@@ -266,7 +297,11 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	 * 中来设置要返回的地址，不基于direct call的方式来实现origin call。
 	 */
 	movq RIP(%rsp), %rax
-	/* 把pt_regs中的rip存到了r14的位置？ */
+	/* 把pt_regs中的rip存到了栈底的rip的位置。这里，MCOUNT_REG_SIZE+8的偏移
+	 * 就是它的位置。
+	 *
+	 * 这里也是function graph实现的地方，通过将这里的
+	 */
 	movq %rax, MCOUNT_REG_SIZE+8(%rsp)
 
 	/* restore the rest of pt_regs */
@@ -278,6 +313,9 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	movq RBX(%rsp), %rbx
 
 	movq ORIG_RAX(%rsp), %rax
+	/* 这里的MCOUNT_REG_SIZE-8是最后一个寄存器的位置，也就是SS寄存器（干啥的？）。
+	 * 这里把origin_rax保存到了ss里面。
+	 */
 	movq %rax, MCOUNT_REG_SIZE-8(%rsp)
 
 	/* 如果ORIG_RAX寄存器里面有值，那么就进行跳转，并调用其中的值作为函数。 */
@@ -287,7 +325,7 @@ SYM_INNER_LABEL(ftrace_regs_caller_jmp, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	jnz	1f
 
-	/* 在调用完handler处理且恢复了所有的寄存器的状态后，尝试执行direct call */
+	/* 这里是不进行direct call的地方，这里会进行寄存器的恢复，然后直接返回。 */
 	restore_mcount_regs
 	/* Restore flags */
 	popfq
@@ -314,6 +352,9 @@ SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	movq %rdi, MCOUNT_REG_SIZE-8(%rsp)
 	movq %rax, MCOUNT_REG_SIZE(%rsp)
 
+	/* 恢复寄存器的状态。这里恢复的时候，会保留最后一个寄存器，使其留在栈中。下面的popfq
+	 * 实际上弹出的是我们上面修整过的flags，构造的rip并不会被弹出。
+	 */
 	restore_mcount_regs 8
 	/* Restore flags */
 	popfq
@@ -332,6 +373,15 @@ SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	 * 这里没有看到jump的指令呢？
 	 */
 	add $8, %rsp
+	/* 经过上面的add之后，现在的栈的情况是：
+	 *   rip	-	8，caller的下一条指令的地址
+	 *   ------------------------------------
+	 *   rip	-	8，目标函数地址+4
+	 *   rip	-	8，direct call的地址
+	 *
+	 * 所以这里return的话，会直接跳到direct call的地方，且栈的情况和直接在目标函数
+	 * 的fentry处调用direct call函数是相同的效果。
+	 */
 	ALTERNATIVE __stringify(RET), \
 		    __stringify(ANNOTATE_UNRET_SAFE; ret; int3), \
 		    X86_FEATURE_CALL_DEPTH

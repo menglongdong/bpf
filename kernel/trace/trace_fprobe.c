@@ -21,6 +21,10 @@
 #include "trace_probe_kernel.h"
 #include "trace_probe_tmpl.h"
 
+/* 类似于ftrace/kprobe，但是这个是基于fprobe的，且基于BTF，能够直接指定函数的参数
+ * 名称等信息。
+ */
+
 #define FPROBE_EVENT_SYSTEM "fprobes"
 #define TRACEPOINT_EVENT_SYSTEM "tracepoints"
 #define RETHOOK_MAXACTIVE_MAX 4096

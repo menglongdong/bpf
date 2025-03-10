@@ -1278,11 +1278,13 @@ void *fgraph_retrieve_parent_data(int idx, int *size_bytes, int depth);
  * Used in struct thread_info
  */
 struct ftrace_ret_stack {
+	/* 这个是caller的rip */
 	unsigned long ret;
 	unsigned long func;
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	unsigned long fp;
 #endif
+	/* 这个是 &pt_regs->rsp */
 	unsigned long *retp;
 };
 

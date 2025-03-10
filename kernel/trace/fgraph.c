@@ -26,6 +26,15 @@
 #define FGRAPH_FRAME_SIZE	sizeof(struct ftrace_ret_stack)
 #define FGRAPH_FRAME_OFFSET	DIV_ROUND_UP(FGRAPH_FRAME_SIZE, sizeof(long))
 
+/* function_graph本身是作为一个ftrace ops来注册到ftrace系统的，也就是说对于ftrace而言
+ * 看到的是一个ops，也就是 graph_ops 。后续如果有graph ops，都会以graph ops的形式
+ * 注册到function graph框架中的。
+ *
+ * 在 ftrace_graph_func->function_graph_enter_regs里面，会将parent rip修改为
+ * trampoline return_to_handler，同时将原始的parent rip保存到一个数组从。这个trampoline
+ * 又会调用ftrace_return_to_handler来获取parent rip，并将返回地址修正为这个地址。
+ */
+
 /*
  * On entry to a function (via function_graph_enter()), a new fgraph frame
  * (ftrace_ret_stack) is pushed onto the stack as well as a word that
@@ -174,6 +183,10 @@ int ftrace_graph_active;
 
 static struct kmem_cache *fgraph_stack_cachep;
 
+/* 这个里面存储了所有的function graph的callback函数，在callback数量超过1个的时候，
+ * 会通过遍历这个数组中的ops来执行。每个fgraph_ops里面会内嵌一个ftrace_ops，这里是
+ * 为了使用ftrace_ops的hash机制，即将目标函数放到对应的哈希表中。
+ */
 static struct fgraph_ops *fgraph_array[FGRAPH_ARRAY_SIZE];
 static unsigned long fgraph_array_bitmask;
 
@@ -659,6 +672,12 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 	int bit;
 	int i;
 
+	/* 这里的ret是caller的地址，即parent rip。retp单纯地是ret的地址，即
+	 * &pt_regs->rsp（对于x86而言）。这个函数如果返回0的话，会导致外面的调用者
+	 * 将retp里的内容填充为return_hooker。这样就会导致caller的rip变为
+	 * return_hooker。
+	 */
+
 	bit = ftrace_test_recursion_trylock(func, ret);
 	if (bit < 0)
 		return -EBUSY;
@@ -666,6 +685,7 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 	trace.func = func;
 	trace.depth = ++current->curr_ret_depth;
 
+	/* 把当前函数的这些信息都存到栈中 */
 	offset = ftrace_push_return_trace(ret, func, frame_pointer, retp, 0);
 	if (offset < 0)
 		goto out;
@@ -690,6 +710,9 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 			if (gops == &fgraph_stub)
 				continue;
 
+			/* 遍历所有的fgraph的ops，在满足其哈希表的情况下执行对应的ops。
+			 * 这里执行的是入口函数的ops。
+			 */
 			save_curr_ret_stack = current->curr_ret_stack;
 			if (ftrace_ops_test(&gops->ops, func, NULL) &&
 			    gops->entryfunc(&trace, gops, fregs))
@@ -706,6 +729,9 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 	/*
 	 * Since this function uses fgraph_idx = 0 as a tail-call checking
 	 * flag, set that bit always.
+	 */
+	/* 每个frame后面还会有一个u64的用来存储flags等信息的，里面存储着处理过当前的stack
+	 * 的ops，用来进行加速的东西。
 	 */
 	set_bitmap(current, offset, bitmap | BIT(0));
 	ftrace_test_recursion_unlock(bit);

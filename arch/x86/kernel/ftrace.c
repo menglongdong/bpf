@@ -674,6 +674,9 @@ void prepare_ftrace_return(unsigned long ip, unsigned long *parent,
 }
 
 #ifdef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
+/* 直接在ftrace_caller_regs的trampoline中被调用的函数，属于graph_ops中的一部分。
+ * 这里的参数都是通过trampoline传递进来的，其中op就是graph_ops。
+ */
 void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
@@ -685,8 +688,11 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 	if (unlikely(skip_ftrace_return()))
 		return;
 
-
 	if (!function_graph_enter_regs(*parent, ip, 0, parent, fregs))
+		/* 这里把trampoline里栈底的数据改成了return_hooker，相当于把
+		 * 当一个栈帧中的rip改成了return_hooker，会导致trampoline直接
+		 * 跳转到return_hooker中执行？
+		 */
 		*parent = return_hooker;
 }
 #endif

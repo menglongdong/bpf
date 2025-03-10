@@ -1476,6 +1476,9 @@ struct task_struct {
 	int				curr_ret_depth;
 
 	/* Stack of return addresses for return function tracing: */
+	/* 这是一段内存，里面相当于是一个ftrace_ret_stack的数组。curr_ret_stack存储
+	 * 了当前栈顶的那个元素在内存中的偏移。
+	 */
 	unsigned long			*ret_stack;
 
 	/* Timestamp for last schedule: */

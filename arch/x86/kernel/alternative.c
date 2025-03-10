@@ -1177,6 +1177,8 @@ void __init_or_module noinline apply_seal_endbr(s32 *start, s32 *end)
 {
 	s32 *s;
 
+	/* 这里的地址集合，是真正的函数的地址，因此这里addr - 16获取到的就是cfi的地址 */
+
 	for (s = start; s < end; s++) {
 		void *addr = (void *)s + *s;
 
@@ -1626,6 +1628,12 @@ static int cfi_rewrite_preamble(s32 *start, s32 *end)
 {
 	s32 *s;
 
+	/* 修改每个函数前面的padding空间的信息。这里的start_cfi里面存储的
+	 * 是需要被修改的函数的偏移，获取到的是原始的函数的地址，即：
+	 *   addr - padding
+	 * 在进行修改的时候，它默认为这个地址就是cfi伪指令的地址。并且在FINEIBT
+	 * 修正的时候，也是直接从这个地址开始进行修改的，要修改的字节数为16个。
+	 */
 	for (s = start; s < end; s++) {
 		void *addr = (void *)s + *s;
 		int arity;
@@ -1838,8 +1846,8 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 		return;
 
 	case CFI_KCFI:
-		pr_cfi_debug("CFI: re-enabling all indirect call checking\n");
-		ret = cfi_enable_callers(start_retpoline, end_retpoline);
+	pr_cfi_debug("CFI: re-enabling all indirect call checking\n");
+	ret = cfi_enable_callers(start_retpoline, end_retpoline);
 		if (ret)
 			goto err;
 
@@ -1851,13 +1859,14 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 	case CFI_FINEIBT:
 		pr_cfi_debug("CFI: adding FineIBT to all preambles\n");
 		/* place the FineIBT preamble at func()-16 */
+		/* 修改被调用的函数padding那里的信息 */
 		ret = cfi_rewrite_preamble(start_cfi, end_cfi);
 		if (ret)
 			goto err;
 
 		/* rewrite the callers to target func()-16 */
-		pr_cfi_debug("CFI: rewriting indirect call sites to use FineIBT\n");
-		ret = cfi_rewrite_callers(start_retpoline, end_retpoline);
+	pr_cfi_debug("CFI: rewriting indirect call sites to use FineIBT\n");
+	ret = cfi_rewrite_callers(start_retpoline, end_retpoline);
 		if (ret)
 			goto err;
 

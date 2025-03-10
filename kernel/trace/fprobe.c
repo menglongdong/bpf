@@ -18,6 +18,11 @@
 
 #include "trace.h"
 
+/**
+ * fprobe是基于ftrace-graph的一种机制。其原理和BPF-TRACING FENTRY/FEXIT类似，
+ * 不同的是他是基于function-graph的，所以它可以批量地去为多个函数注册单个callback。
+ */
+
 #define FPROBE_IP_HASH_BITS 8
 #define FPROBE_IP_TABLE_SIZE (1 << FPROBE_IP_HASH_BITS)
 

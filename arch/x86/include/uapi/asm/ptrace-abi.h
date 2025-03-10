@@ -30,6 +30,7 @@
  * C ABI says these regs are callee-preserved. They aren't saved on kernel entry
  * unless syscall needs a complete, fully filled "struct pt_regs".
  */
+/* 被调用的那个函数不需要维护这些寄存器，可以直接使用 */
 #define R15 0
 #define R14 8
 #define R13 16
@@ -37,6 +38,7 @@
 #define RBP 32
 #define RBX 40
 /* These regs are callee-clobbered. Always saved on kernel entry. */
+/* 被调用的函数需要维护这些寄存器的值，返回的时候要恢复 */
 #define R11 48
 #define R10 56
 #define R9 64

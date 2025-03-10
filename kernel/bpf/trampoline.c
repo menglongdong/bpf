@@ -665,8 +665,8 @@ again:
 			 * in the origin call case, and we don't need to
 			 * skip the frame.
 			 */
-			tr->flags &= ~BPF_TRAMP_F_SKIP_FRAME;
-		}
+				tr->flags &= ~BPF_TRAMP_F_SKIP_FRAME;
+			}
 	}
 #endif
 
