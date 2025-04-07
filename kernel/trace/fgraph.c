@@ -33,6 +33,22 @@
  * 在 ftrace_graph_func->function_graph_enter_regs里面，会将parent rip修改为
  * trampoline return_to_handler，同时将原始的parent rip保存到一个数组从。这个trampoline
  * 又会调用ftrace_return_to_handler来获取parent rip，并将返回地址修正为这个地址。
+ *
+ * 整个实现的逻辑可以归类为下面这个过程：
+ * 	caller rip		return_to_handler
+ * ---------------	    ----------------------
+ * 	callee rip	-->	callee rip
+ * ---------------	    ----------------------
+ * 	trampoline		trampoline
+ * 经过这个处理后，在trampoline运行完后，会返回到callee（目标函数）那里继续执行。
+ * 在目标函数执行完成后，会跳转到return_to_handler。通过这种方式，实现了对目标
+ * 函数entry和exit的hook，可以看出来其实现方式和bpf trampoline还是有很大区别的。
+ * 在return_to_handler里面，其栈的变化为：
+ * 	rip				rip			rip
+ * ---------------	-->	------------	-->	------------
+ * 				Ldo_rop rip		 caller rip
+ * 在return_to_handler里面，会通过shadow stack来获取保存的caller rip，然后
+ * 通过一次伪调用的方式把栈恢复成的一开始的状态，并return。
  */
 
 /*
@@ -885,6 +901,9 @@ __ftrace_return_to_handler(struct ftrace_regs *fregs, unsigned long frame_pointe
 			if (gops == &fgraph_stub)
 				continue;
 
+			/* 可以看出来，fgraph里面是可以拿到返回值，函数地址、调用
+			 * 深度等信息的。但是，它是拿不到函数参数信息的。
+			 */
 			gops->retfunc(&trace, gops, fregs);
 		}
 	}

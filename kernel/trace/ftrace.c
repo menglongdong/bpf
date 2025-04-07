@@ -124,7 +124,9 @@ static int ftrace_disabled __read_mostly;
 
 DEFINE_MUTEX(ftrace_lock);
 
+/* 这个是ftrace的ops链表的头部，遍历的时候如果遍历到ftrace_list_end，就说明结束了。 */
 struct ftrace_ops __rcu *ftrace_ops_list __read_mostly = (struct ftrace_ops __rcu *)&ftrace_list_end;
+/* 这个是原始trampoline中的ops函数。 */
 ftrace_func_t ftrace_trace_function __read_mostly = ftrace_stub;
 struct ftrace_ops global_ops;
 
@@ -1844,6 +1846,9 @@ static bool __ftrace_hash_rec_update(struct ftrace_ops *ops,
 			 * function, and the ops has a trampoline registered
 			 * for it, then we can call it directly.
 			 */
+			/* 在设置ops的哈希表的时候，会根据rec和ops的状态对rec
+			 * 进行更新。
+			 */
 			if (ftrace_rec_count(rec) == 1 && ops->trampoline)
 				rec->flags |= FTRACE_FL_TRAMP;
 			else
@@ -2299,6 +2304,9 @@ static int ftrace_check_record(struct dyn_ftrace *rec, bool enable, bool update)
 	 * Same for direct calls.
 	 */
 	if (flag) {
+		/* 下面的代码用来检查当前require的模式和current模式是否一致，
+		 * 不一致的话代表需要更新。
+		 */
 		if (!(rec->flags & FTRACE_FL_REGS) !=
 		    !(rec->flags & FTRACE_FL_REGS_EN))
 			flag |= FTRACE_FL_REGS;
@@ -2693,7 +2701,7 @@ unsigned long ftrace_get_addr_new(struct dyn_ftrace *rec)
 		WARN_ON_ONCE(1);
 	}
 
-	/* Trampolines take precedence over regs */
+	/* 只有一个ops且存在trampoline，那么就直接调用这个ops的trampoline。 */
 	if (rec->flags & FTRACE_FL_TRAMP) {
 		ops = ftrace_find_tramp_ops_new(rec);
 		if (FTRACE_WARN_ON(!ops || !ops->trampoline)) {
@@ -2705,6 +2713,11 @@ unsigned long ftrace_get_addr_new(struct dyn_ftrace *rec)
 		return ops->trampoline;
 	}
 
+	/* 这里应该是全局性质的，调用的是list_ops的形式。所以，只有三种情况：
+	 * 直接调用direct
+	 * 直接调用trampoline
+	 * 调用list_ops
+	 */
 	if (rec->flags & FTRACE_FL_REGS)
 		return (unsigned long)FTRACE_REGS_ADDR;
 	else
@@ -3622,6 +3635,9 @@ int ftrace_startup_subops(struct ftrace_ops *ops, struct ftrace_ops *subops, int
 		ops->func_hash->filter_hash = filter_hash;
 		ops->func_hash->notrace_hash = notrace_hash;
 		list_add(&subops->list, &ops->subop_list);
+		/* 对于ftrace graph，会走这里的路径。这个函数会进行ops的注册，
+		 * 过程中会涉及到trampoline的创建。
+		 */
 		ret = ftrace_startup(ops, command);
 		if (ret < 0) {
 			list_del(&subops->list);
@@ -6159,8 +6175,15 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	ops->func = call_direct_funcs;
 	ops->flags |= MULTI_FLAGS;
 	ops->trampoline = FTRACE_REGS_ADDR;
+	/* 这个是BPF TRAMPOLINE IMAGE的地址 */
 	ops->direct_call = addr;
 
+	/* 每个BPF TRAMPOLINE都会注册一个ftrace的ops到系统里，相当于BPF的TRAMPOLINE
+	 * 和ftrace的TRAMPOLINE是一对一的关系。
+	 *
+	 * 注意：如果当前的函数没有别的callback，那么会直接call bpf trampoline，而
+	 * 不会走ftrace的trampoline，这个相当于纳管了，ftrace会自己做判断。
+	 */
 	err = register_ftrace_function_nolock(ops);
 	if (err)
 		reset_direct(ops, addr);
@@ -6233,6 +6256,10 @@ __modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	tmp_ops.func_hash = ops->func_hash;
 	tmp_ops.direct_call = addr;
 
+	/* 先注册一个空的ops，使得当前的目标函数们转为调用ops_list。然后更新
+	 * direct_functions和ops->direct_call。在取消注册的空的ops，那么ftrace
+	 * 就会利用direct_functions里最新的信息来更新HOOK。
+	 */
 	err = register_ftrace_function_nolock(&tmp_ops);
 	if (err)
 		return err;

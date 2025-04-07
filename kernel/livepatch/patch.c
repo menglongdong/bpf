@@ -118,6 +118,11 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (func->nop)
 		goto unlock;
 
+	/* 这里修改trampoline传递过来的pt_regs中的rip，trampoline会将这个rip
+	 * 设置到callee rip中。这就会导致，trampoline在返回的时候，会直接返回
+	 * 到新的函数那里，而跳过老的函数。这里看起来用的方式和bpf trampoline的
+	 * origin call有点不一样。
+	 */
 	ftrace_regs_set_instruction_pointer(fregs, (unsigned long)func->new_func);
 
 unlock:

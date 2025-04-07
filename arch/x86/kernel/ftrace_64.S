@@ -164,8 +164,11 @@ SYM_FUNC_START(ftrace_caller)
 
 	CALL_DEPTH_ACCOUNT
 
-	/* Stack - skipping return address of ftrace_caller */
+	/* leaq指令是用来取地址的，也就是说这里的pt_regs->sp存储的是caller rip
+	 * 在栈里的地址。
+	 */
 	leaq MCOUNT_REG_SIZE+8(%rsp), %rcx
+	/* 可见pt_regs->sp中存储的是caller rip */
 	movq %rcx, RSP(%rsp)
 
 SYM_INNER_LABEL(ftrace_caller_op_ptr, SYM_L_GLOBAL)
@@ -174,7 +177,9 @@ SYM_INNER_LABEL(ftrace_caller_op_ptr, SYM_L_GLOBAL)
 	/* 这个指令也是会在runtime被替换的 */
 	movq function_trace_op(%rip), %rdx
 
-	/* regs go into 4th parameter */
+	/* 下面这个指令类似于movq %rsp, %rcx，leaq是取地址的，leaq (%rsp)其实
+	 * 就是%rsp。
+	 */
 	leaq (%rsp), %rcx
 
 	/* Only ops with REGS flag set should have CS register set */
@@ -452,6 +457,17 @@ SYM_CODE_START(return_to_handler)
 
 	call ftrace_return_to_handler
 
+	/* 把ftrace_return_to_handler的返回值保存到rdi寄存器中，并恢复rax和
+	 * rdx寄存器，然后恢复栈帧到一开始的状态，即栈顶是rip的状态。随后，调用
+	 * Ldo_rop，把返回值放到栈顶。这里能跳转到return_to_handler，是因为之前
+	 * 把caller rip替换为了return_to_handler。
+	 *   caller rip      <-> return_to_handler ip
+	 * 在callee执行完毕后，会跳转到return_to_handler，这里会执行一次call，让
+	 * 它的栈再次变成：
+	 *   caller rip
+	 * 也就是说ftrace_return_to_handler返回的是保存的caller rip，这样程序
+	 * 在return的时候就会跳转到caller rip，实现恢复。
+	 */
 	movq %rax, %rdi
 	movq RDX(%rsp), %rdx
 	movq RAX(%rsp), %rax

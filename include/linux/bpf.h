@@ -1884,6 +1884,9 @@ struct bpf_link_ops {
 
 struct bpf_tramp_link {
 	struct bpf_link link;
+	/* 一个trampoline里面可以有多个bpf progs。同一个类型的progs是通过这个
+	 * 链表连接在一起的，这个实例和bpf progs是一对一的关系。
+	 */
 	struct hlist_node tramp_hlist;
 	u64 cookie;
 };

@@ -762,16 +762,22 @@ bool is_ftrace_trampoline(unsigned long addr);
  * starts saving regs it will do so until all ftrace_ops are removed
  * from tracing that function.
  */
+/* 这里的EN代表当前的record已经生效的状态，比如FTRACE_FL_DIRECT_EN代表当前已经
+ * 设置为direct模式，而FTRACE_FL_DIRECT代表当前record需要被设置为direct模式。
+ */
 enum {
 	FTRACE_FL_ENABLED	= (1UL << 31),
 	FTRACE_FL_REGS		= (1UL << 30),
 	FTRACE_FL_REGS_EN	= (1UL << 29),
+	/* rec只有一个owner且ops有trampoline的时候，使用trampoline。 */
 	FTRACE_FL_TRAMP		= (1UL << 28),
 	FTRACE_FL_TRAMP_EN	= (1UL << 27),
 	FTRACE_FL_IPMODIFY	= (1UL << 26),
 	FTRACE_FL_DISABLED	= (1UL << 25),
+	/* 存在ops是direct类型的，就会设置这个标志。 */
 	FTRACE_FL_DIRECT	= (1UL << 24),
 	FTRACE_FL_DIRECT_EN	= (1UL << 23),
+	/* 感觉像是direct || trampoline */
 	FTRACE_FL_CALL_OPS	= (1UL << 22),
 	FTRACE_FL_CALL_OPS_EN	= (1UL << 21),
 	FTRACE_FL_TOUCHED	= (1UL << 20),
@@ -1284,7 +1290,7 @@ struct ftrace_ret_stack {
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	unsigned long fp;
 #endif
-	/* 这个是 &pt_regs->rsp */
+	/* 这个是 caller rip在栈里的地址 */
 	unsigned long *retp;
 };
 

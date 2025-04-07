@@ -21,6 +21,12 @@
 /**
  * fprobe是基于ftrace-graph的一种机制。其原理和BPF-TRACING FENTRY/FEXIT类似，
  * 不同的是他是基于function-graph的，所以它可以批量地去为多个函数注册单个callback。
+ *
+ * 每次注册fprobe实例的时候，都会将这个fprobe对应的函数列表设置到fgraph ops的
+ * 哈希表里，使其被HOOK。每个目标函数的IP地址都会被加入到一个哈希表中，是
+ * ip -> fprobe_hlist_node 的映射哈希。
+ *
+ * 也就是说，fprobe必然涉及到哈希的查找，效率比较低的。
  */
 
 #define FPROBE_IP_HASH_BITS 8
@@ -390,6 +396,7 @@ static int fprobe_fgraph_entry(struct ftrace_graph_ent *trace, struct fgraph_ops
 	if (WARN_ON_ONCE(!fregs))
 		return 0;
 
+	/* 根据被 hook 函数地址在哈希表中查找对应 fprobe 列表。 */
 	guard(rcu)();
 	head = rhltable_lookup(&fprobe_ip_table, &func, fprobe_rht_params);
 	reserved_words = 0;

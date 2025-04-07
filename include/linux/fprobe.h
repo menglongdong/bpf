@@ -67,6 +67,7 @@ struct fprobe {
 	fprobe_entry_cb entry_handler;
 	fprobe_exit_cb  exit_handler;
 
+	/* 每个目标函数对应一个这里的fprobe_hlist_node实例 */
 	struct fprobe_hlist	*hlist_array;
 };
 

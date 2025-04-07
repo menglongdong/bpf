@@ -683,15 +683,16 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 	struct pt_regs *regs = &arch_ftrace_regs(fregs)->regs;
 	unsigned long *stack = (unsigned long *)kernel_stack_pointer(regs);
 	unsigned long return_hooker = (unsigned long)&return_to_handler;
+	/* 这里拿到的是保存的rsp寄存器里的值，也就是caller rip的地址。 */
 	unsigned long *parent = (unsigned long *)stack;
 
 	if (unlikely(skip_ftrace_return()))
 		return;
 
 	if (!function_graph_enter_regs(*parent, ip, 0, parent, fregs))
-		/* 这里把trampoline里栈底的数据改成了return_hooker，相当于把
-		 * 当一个栈帧中的rip改成了return_hooker，会导致trampoline直接
-		 * 跳转到return_hooker中执行？
+		/* 在没有出现问题的情况下，这里直接通过修改栈的方式将caller rip
+		 * 修改为了return_hooker。这里可以看出来，在ops里面也是可以对
+		 * 栈进行各种修改的。
 		 */
 		*parent = return_hooker;
 }
