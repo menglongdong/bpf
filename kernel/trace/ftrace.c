@@ -1619,6 +1619,7 @@ static int ftrace_cmp_recs(const void *a, const void *b)
 	const struct dyn_ftrace *key = a;
 	const struct dyn_ftrace *rec = b;
 
+	/* 相当于 rec->ip <= end && rec->ip > start - MCOUNT_INSN_SIZE */
 	if (key->flags < rec->ip)
 		return -1;
 	if (key->ip >= rec->ip + MCOUNT_INSN_SIZE)
@@ -1636,6 +1637,9 @@ static struct dyn_ftrace *lookup_rec(unsigned long start, unsigned long end)
 	key.ip = start;
 	key.flags = end;	/* overload flags, as it is unsigned long */
 
+	/* 这里首先遍历所有的ftrace_page。每个page中的records按照大小顺序进行了排序，
+	 * 这里首先查找对应的page，即根据起止地址来查找范围有交集的page。
+	 */
 	for (pg = ftrace_pages_start; pg; pg = pg->next) {
 		if (pg->index == 0 ||
 		    end < pg->records[0].ip ||
@@ -1790,6 +1794,10 @@ static bool __ftrace_hash_rec_update(struct ftrace_ops *ops,
 	bool update = false;
 	int count = 0;
 	int all = false;
+
+	/* 使用当前的ops来更新rec。这里是通过遍历所有的rec，并判断其是否在ops的哈希表
+	 * 中来实现的。
+	 */
 
 	/* Only update if the ops has been registered */
 	if (!(ops->flags & FTRACE_OPS_FL_ENABLED))
@@ -5031,6 +5039,12 @@ match_records(struct ftrace_hash *hash, char *func, int len, char *mod)
 	if (func_g.type == MATCH_INDEX)
 		return add_rec_by_index(hash, &func_g, clear_filter);
 
+	/* 遍历所有的rec，通过rec找到对应的函数地址和函数名称。这个是可以找到一个唯一的
+	 * 的，但是可能找出来的可能是错的。但由于这里是从小到大查找的，因此会首先找到
+	 * 对的那个。但是这个跳过了FTRACE_FL_DISABLED的，因此不会找到错误的那个记录。
+	 *
+	 * 这里的实现的效率很低。。。。。。
+	 */
 	do_for_each_ftrace_rec(pg, rec) {
 
 		if (rec->flags & FTRACE_FL_DISABLED)
@@ -5940,6 +5954,10 @@ ftrace_match_addr(struct ftrace_hash *hash, unsigned long *ips,
 	int err;
 
 	for (i = 0; i < cnt; i++) {
+		/* 这里根据函数的IP地址查找对应的mrecord，并且将其加入到哈希表中。这里
+		 * 没有进行任何的合法性检查，是有问题的，因为ip和查找出来的mrecord可能
+		 * 是没关系的。
+		 */
 		err = __ftrace_match_addr(hash, ips[i], remove);
 		if (err) {
 			/*

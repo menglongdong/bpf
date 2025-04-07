@@ -189,6 +189,9 @@ int ftrace_modify_call(struct dyn_ftrace *rec, unsigned long old_addr,
 	return -EINVAL;
 }
 
+/* 这个函数用于直接替换原始的trampoline中的ops函数，可以看出来原始的trampoline
+ * 也是可以直接被ftrace更新record的时候使用的。
+ */
 int ftrace_update_ftrace_func(ftrace_func_t func)
 {
 	unsigned long ip;

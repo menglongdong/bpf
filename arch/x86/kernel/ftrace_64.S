@@ -371,6 +371,17 @@ SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	 * pattern unbalances the RSB, inject a pointless CALL to rebalance.
 	 */
 	ANNOTATE_INTRA_FUNCTION_CALL
+	/* 这个时候的栈的情况是：
+	 *   rip	-	8，caller的下一条指令的地址
+	 *   ------------------------------------
+	 *   rip	-	8，目标函数地址+4
+	 *   rip	-	8，direct call的地址
+	 *
+	 * 这里本来是可以直接ret的，就会跳转到direct call的地址，但是这里
+	 * 直接ret的话，会导致栈的情况不对，所以这里需要调用一个函数来修正栈的
+	 * 情况。下面的call就单纯的是为了平衡RSB，使得call的数量和ret的数量是一致的，
+	 * 从而保证分支预测的正确性。
+	 */
 	CALL .Ldo_rebalance
 	int3
 .Ldo_rebalance:

@@ -67,7 +67,11 @@ struct fprobe {
 	fprobe_entry_cb entry_handler;
 	fprobe_exit_cb  exit_handler;
 
-	/* 每个目标函数对应一个这里的fprobe_hlist_node实例 */
+	/* 每个目标函数对应一个这里的fprobe_hlist_node实例。
+	 *
+	 * 这里存储的不是函数的地址，而是mrecord的地址。如果ftrace查找错误，那么这里
+	 * 也会存储错误的record，并且后面都会在这个错误的record上搞事情。
+	 */
 	struct fprobe_hlist	*hlist_array;
 };
 

@@ -555,6 +555,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 * call_rcu_tasks() is not necessary.
 	 */
 	if (im->ip_after_call) {
+		/* 将 call-origin 之后的指令改为跳转到 epilogue，快速收敛退出路径。 */
 		int err = bpf_arch_text_poke(im->ip_after_call, BPF_MOD_NOP,
 					     BPF_MOD_JUMP, NULL,
 					     im->ip_epilogue);
@@ -682,6 +683,9 @@ again:
 		goto out;
 	}
 
+	/* 这里可以看出来，并没有直接对原始的bpf trampoline image进行修改，而是分配了一个
+	 * 新的image，然后用新的代替老的。
+	 */
 	im = bpf_tramp_image_alloc(tr->key, size);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);

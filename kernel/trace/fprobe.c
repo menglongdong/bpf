@@ -519,6 +519,9 @@ static int fprobe_graph_add_ips(unsigned long *addrs, int num)
 
 	lockdep_assert_held(&fprobe_mutex);
 
+	/* 更新这个fgraph上的哈希表。这里是基于fgraph的，不涉及到direct call，因此
+	 * 直接更新哈希表即可。
+	 */
 	ret = ftrace_set_filter_ips(&fprobe_graph_ops.ops, addrs, num, 0, 0);
 	if (ret)
 		return ret;
@@ -867,6 +870,7 @@ int register_fprobe_ips(struct fprobe *fp, unsigned long *addrs, int num)
 
 	if (!ret) {
 		add_fprobe_hash(fp);
+		/* 将记录逐个插入 IP->fprobe 节点哈希，并在失败时回滚。 */
 		for (i = 0; i < hlist_array->size; i++) {
 			ret = insert_fprobe_node(&hlist_array->array[i]);
 			if (ret)

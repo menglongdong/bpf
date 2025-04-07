@@ -25698,6 +25698,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			else
 				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
 		} else {
+			/* 这里根据BTF ID找到对应的函数名称，再根据函数名称找到对应的
+			 * 函数地址。这个转换过程中，可能会出现错乱。
+			 */
 			if (btf_is_module(btf)) {
 				mod = btf_try_get_module(btf);
 				if (mod)
