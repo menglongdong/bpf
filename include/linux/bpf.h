@@ -1276,6 +1276,10 @@ static inline bool bpf_trampoline_use_jmp(u64 flags)
 }
 #endif
 
+#ifdef CONFIG_ARCH_HAS_BPF_GLOBAL_CALLER
+void bpf_global_caller(void);
+#endif
+
 struct bpf_ksym {
 	unsigned long		 start;
 	unsigned long		 end;
