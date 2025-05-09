@@ -1264,6 +1264,10 @@ typedef void (*bpf_trampoline_exit_t)(struct bpf_prog *prog, u64 start,
 bpf_trampoline_enter_t bpf_trampoline_enter(const struct bpf_prog *prog);
 bpf_trampoline_exit_t bpf_trampoline_exit(const struct bpf_prog *prog);
 
+#ifdef CONFIG_ARCH_HAS_BPF_GLOBAL_CALLER
+void bpf_global_caller(void);
+#endif
+
 struct bpf_ksym {
 	unsigned long		 start;
 	unsigned long		 end;

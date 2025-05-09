@@ -12,6 +12,8 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/bpf_tramp.h>
+#include <linux/kfunc_md.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -3538,6 +3540,157 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	bpf_jit_free_exec(image);
 	return ret;
 }
+
+#define FUNC_ARGS_1		((2 + 0) * 8)
+#define FUNC_ARGS_2		((2 + 1) * 8)
+#define FUNC_ARGS_3		((2 + 2) * 8)
+#define FUNC_ARGS_4		((2 + 3) * 8)
+#define FUNC_ARGS_5		((2 + 4) * 8)
+#define FUNC_ARGS_6		((2 + 5) * 8)
+
+#define __arg(idx, offset) __stringify(FUNC_ARGS_##idx - offset)
+
+#define SAVE_ARGS				\
+	"movq %rdi, " __arg(1, 0) "(%rsp)\n"	\
+	"movq %rsi, " __arg(2, 0) "(%rsp)\n"	\
+	"movq %rdx, " __arg(3, 0) "(%rsp)\n"	\
+	"movq %rcx, " __arg(4, 0) "(%rsp)\n"	\
+	"movq %r8, "  __arg(5, 0) "(%rsp)\n"	\
+	"movq %r9, "  __arg(6, 0) "(%rsp)\n"
+
+#define __RESTORE_ARGS(offset, reg, prefix)			\
+	"movq " __arg(1, offset) "(" reg "), " prefix "rdi\n"	\
+	"movq " __arg(2, offset) "(" reg "), " prefix "rsi\n"	\
+	"movq " __arg(3, offset) "(" reg "), " prefix "rdx\n"	\
+	"movq " __arg(4, offset) "(" reg "), " prefix "rcx\n"	\
+	"movq " __arg(5, offset) "(" reg "), " prefix "r8\n"	\
+	"movq " __arg(6, offset) "(" reg "), " prefix "r9\n"
+
+#define RESTORE_ORIGIN __RESTORE_ARGS(FUNC_ARGS_1, "%[args]", "%%")
+#define RESTORE_ARGS __RESTORE_ARGS(0, "%rsp", "%")
+
+/* Layout of the stack frame:
+ *   rip		----> 8 bytes
+ *   ----------------------------------------------
+ *   return value	----> 8 bytes
+ *   args		----> 8 * 6 bytes
+ *   arg count		----> 8 bytes
+ *   origin ip		----> 8 bytes
+ */
+#define stack_size __stringify(8 + 8 + 6 * 8 + 8)
+
+static __always_inline notrace int
+run_tramp_prog(struct hlist_head *head, struct bpf_tramp_run_ctx *run_ctx,
+	       unsigned long *args, bool modify_return,
+	       unsigned long *ret_ptr)
+{
+	struct kfunc_md_tramp_prog *tramp;
+	struct bpf_prog *prog;
+
+	hlist_for_each_entry_rcu(tramp, head, list) {
+		u64 start_time, ret;
+
+		run_ctx->bpf_cookie = tramp->cookie;
+		prog = tramp->prog;
+		start_time = bpf_gtramp_enter_recur(prog, run_ctx);
+
+		if (likely(start_time)) {
+			ret = prog->bpf_func(args, NULL);
+			if (modify_return)
+				*ret_ptr = ret;
+		} else {
+			if (modify_return)
+				ret = 0;
+		}
+
+		bpf_gtramp_exit_recur(prog, start_time, run_ctx);
+		if (modify_return && ret)
+			return 1;
+	}
+
+	return 0;
+}
+
+static __always_used __no_stack_protector notrace unsigned long *
+bpf_global_caller_run(unsigned long *args, unsigned long *ip)
+{
+	unsigned long origin_ip, *ret_ptr;
+	struct bpf_tramp_run_ctx run_ctx;
+	struct kfunc_md *md;
+
+	/* Align to 16 bytes */
+	origin_ip = (*ip) & 0xfffffffffffffff0;
+	rcu_read_lock_dont_migrate();
+	md = __kfunc_md_get(origin_ip);
+	if (unlikely(!md))
+		goto out_unlock;
+
+	/* save the origin function ip for bpf_get_func_ip() */
+	*(args - 2) = origin_ip;
+	*(args - 1) = md->nr_args;
+
+	run_tramp_prog(&md->bpf_progs[BPF_TRAMP_FENTRY], &run_ctx, args, false, NULL);
+	/* no fexit and modify_return, return directly */
+	if (!READ_ONCE(md->bpf_origin_call)) {
+out_unlock:
+		rcu_read_unlock_migrate();
+		return NULL;
+	}
+
+	/* initialize return value */
+	ret_ptr = args + md->nr_args;
+	*ret_ptr = 0;
+	/* The get and put of md->pcref is performed under rcu_read_lock(). */
+	percpu_ref_get(&md->pcref);
+	if (run_tramp_prog(&md->bpf_progs[BPF_TRAMP_MODIFY_RETURN], &run_ctx, args,
+			   true, ret_ptr))
+		goto do_fexit;
+
+	rcu_read_unlock_migrate();
+	/* restore the function arguments and call the origin function */
+	asm volatile(
+		RESTORE_ORIGIN CALL_NOSPEC "\n"
+		"movq %%rax, %0\n"
+		: "=m"(*ret_ptr), ASM_CALL_CONSTRAINT
+		: [args]"r"(args), [thunk_target]"r"(*ip)
+		: "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+	);
+	rcu_read_lock_dont_migrate();
+do_fexit:
+	run_tramp_prog(&md->bpf_progs[BPF_TRAMP_FEXIT], &run_ctx, args, false, NULL);
+	percpu_ref_put(&md->pcref);
+	rcu_read_unlock_migrate();
+
+	return ret_ptr;
+}
+
+__naked void bpf_global_caller(void)
+{
+	asm volatile(
+		"subq $" stack_size ", %rsp\n"
+		SAVE_ARGS
+	);
+
+	asm volatile(
+		"leaq " __stringify(FUNC_ARGS_1) "(%rsp), %rdi\n"
+		"leaq " stack_size "(%rsp), %rsi\n"
+		"call bpf_global_caller_run\n"
+		"test %rax, %rax\n"
+		"jne 1f\n"
+	);
+
+	asm volatile(
+		RESTORE_ARGS
+		"addq $" stack_size ", %rsp\n"
+		ASM_RET
+	);
+
+	asm volatile(
+		"1: movq (%rax), %rax\n"
+		"addq $(" stack_size " + 8), %rsp\n"
+		ASM_RET);
+}
+STACK_FRAME_NON_STANDARD(bpf_global_caller);
 
 static int emit_bpf_dispatcher(u8 **pprog, int a, int b, s64 *progs, u8 *image, u8 *buf)
 {
