@@ -18,6 +18,8 @@ struct kfunc_md {
 	struct rcu_head rcu;
 	unsigned long func;
 	struct hlist_head __rcu bpf_progs[BPF_TRAMP_MAX];
+	/* a trampoline is also on this function */
+	struct bpf_trampoline *tramp;
 	struct percpu_ref pcref;
 	u16 users;
 	bool bpf_origin_call;

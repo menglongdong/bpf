@@ -103,7 +103,7 @@ EXPORT_SYMBOL_GPL(kfunc_md_put);
 
 static bool kfunc_md_bpf_check(struct kfunc_md *md)
 {
-	return md->bpf_prog_cnt;
+	return md->bpf_prog_cnt && !md->tramp;
 }
 
 int kfunc_md_bpf_ips(void ***ips_ptr)
@@ -200,7 +200,6 @@ found:
 	WRITE_ONCE(md->bpf_origin_call, origin_call);
 
 	md->bpf_prog_cnt--;
-
 	kfree_rcu(tramp, rcu);
 	mutex_unlock(&kfunc_md_mutex);
 
