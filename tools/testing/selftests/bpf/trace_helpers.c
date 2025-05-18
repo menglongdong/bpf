@@ -741,3 +741,85 @@ error:
 		free(addrs);
 	return err;
 }
+
+static int str_compare(const void *a, const void *b)
+{
+	const char *str1 = *(const char **)a;
+	const char *str2 = *(const char **)b;
+
+	return strcmp(str1, str2);
+}
+
+static bool is_trace_valid(const struct btf *btf, int btf_type_id)
+{
+	const struct btf_param *args;
+	const struct btf_type *t;
+	__u32 nargs, m;
+
+	t = skip_mods_and_typedefs(btf, btf_type_id, NULL);
+	if (!btf_is_func(t))
+		return false;
+
+	t = skip_mods_and_typedefs(btf, t->type, NULL);
+	if (!btf_is_func_proto(t))
+		return false;
+
+	args = (const struct btf_param *)(t + 1);
+	nargs = btf_vlen(t);
+	if (nargs > 6)
+		return false;
+
+	t = skip_mods_and_typedefs(btf, t->type, NULL);
+	if (btf_is_struct(t) || btf_is_union(t) ||
+	    (nargs && args[nargs - 1].type == 0))
+		return false;
+
+	for (m = 0; m < nargs; m++) {
+		t = skip_mods_and_typedefs(btf, args[m].type, NULL);
+		if (btf_is_struct(t) || btf_is_union(t))
+			break;
+	}
+	if (m < nargs)
+		return false;
+
+	return true;
+}
+
+int bpf_get_btf_type_ids(struct btf *btf, __u32 **btf_type_ids, size_t *ids_cnt)
+{
+	const char *func_name;
+	char **syms = NULL;
+	int err, idx = 0;
+	__u32 *results;
+	size_t cnt;
+
+	err = bpf_get_ksyms(&syms, &cnt, true);
+	if (err)
+		return err;
+
+	results = malloc(sizeof(*results) * cnt);
+	if (!results)
+		return -ENOMEM;
+
+	qsort(syms, cnt, sizeof(char *), str_compare);
+	for (int i = 1; i < btf__type_cnt(btf); i++) {
+		const struct btf_type *t;
+
+		t = skip_mods_and_typedefs(btf, i, NULL);
+		if (!btf_is_func(t))
+			continue;
+		func_name = btf__str_by_offset(btf, t->name_off);
+		if (!bsearch(&func_name, syms, cnt, sizeof(char *), str_compare))
+			continue;
+
+		if (!is_trace_valid(btf, i))
+			continue;
+
+		results[idx++] = i;
+	}
+
+	*ids_cnt = idx;
+	*btf_type_ids = results;
+
+	return 0;
+}

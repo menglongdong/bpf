@@ -44,5 +44,6 @@ int read_build_id(const char *path, char *build_id, size_t size);
 
 int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel);
 int bpf_get_addrs(unsigned long **addrsp, size_t *cntp, bool kernel);
+int bpf_get_btf_type_ids(struct btf *btf, __u32 **btf_type_ids, size_t *ids_cnt);
 
 #endif
