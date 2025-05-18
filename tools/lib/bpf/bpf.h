@@ -426,6 +426,12 @@ struct bpf_link_create_opts {
 			__u64 cookie;
 		} tracing;
 		struct {
+			__u32 cnt;
+			const __u32 *btf_type_ids;
+			const __u32 *btf_fds;
+			const __u64 *cookies;
+		} tracing_multi;
+		struct {
 			__u32 pf;
 			__u32 hooknum;
 			__s32 priority;
