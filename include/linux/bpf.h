@@ -1859,6 +1859,7 @@ struct bpf_shim_tramp_link {
 
 struct bpf_gtramp_link_entry {
 	struct bpf_trampoline *trampoline;
+	struct module *attach_mod;
 	struct btf *attach_btf;
 	void *addr;
 	u64 cookie;
@@ -1868,8 +1869,8 @@ struct bpf_gtramp_link_entry {
 
 struct bpf_gtramp_link {
 	struct bpf_link link;
-	struct bpf_gtramp_link_entry *entries;
 	u32 entry_cnt;
+	struct bpf_gtramp_link_entry entries[] __counted_by(entry_cnt);
 };
 
 struct bpf_tracing_link {
@@ -2884,11 +2885,23 @@ static inline bool bpf_tracing_ctx_access(int off, int size,
 	return true;
 }
 
+static inline bool bpf_is_tracing_multi(const struct bpf_prog *prog)
+{
+	if (prog->type != BPF_PROG_TYPE_TRACING)
+		return false;
+
+	return prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
+		prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI ||
+		prog->expected_attach_type == BPF_MODIFY_RETURN_MULTI;
+}
+
 static inline bool bpf_tracing_btf_ctx_access(int off, int size,
 					      enum bpf_access_type type,
 					      const struct bpf_prog *prog,
 					      struct bpf_insn_access_aux *info)
 {
+	if (bpf_is_tracing_multi(prog))
+		return false;
 	if (!bpf_tracing_ctx_access(off, size, type))
 		return false;
 	return btf_ctx_access(off, size, type, prog, info);

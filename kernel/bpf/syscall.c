@@ -40,6 +40,7 @@
 #include <linux/overflow.h>
 #include <linux/cookie.h>
 #include <linux/verification.h>
+#include <linux/kfunc_md.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -3770,6 +3771,242 @@ out_put_prog:
 	return err;
 }
 
+static void __bpf_gtramp_link_release(struct bpf_gtramp_link *link)
+{
+	struct bpf_gtramp_link_entry *entry;
+
+	for (int i = 0; i < link->entry_cnt; i++) {
+		entry = &link->entries[i];
+		module_put(entry->attach_mod);
+		btf_put(entry->attach_btf);
+	}
+}
+
+static void bpf_gtramp_link_release(struct bpf_link *link)
+{
+	struct bpf_gtramp_link *multi_link =
+		container_of(link, struct bpf_gtramp_link, link);
+
+	bpf_gtrampoline_unlink_prog(multi_link);
+	__bpf_gtramp_link_release(multi_link);
+	if (link->prog)
+		WRITE_ONCE(link->prog->aux->attach_btf_id, 0);
+}
+
+static void bpf_gtramp_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_gtramp_link *tr_link =
+		container_of(link, struct bpf_gtramp_link, link);
+
+	kfree(tr_link);
+}
+
+static void bpf_gtramp_link_show_fdinfo(const struct bpf_link *link,
+					 struct seq_file *seq)
+{
+	struct bpf_gtramp_link *tr_link =
+		container_of(link, struct bpf_gtramp_link, link);
+	int i;
+
+	for (i = 0; i < tr_link->entry_cnt; i++) {
+		seq_printf(seq,
+			   "attach_type:\t%d\n"
+			   "target_addr:\t%p\n",
+			   tr_link->link.attach_type,
+			   tr_link->entries[i].addr);
+	}
+}
+
+static const struct bpf_link_ops bpf_gtramp_link_lops = {
+	.release = bpf_gtramp_link_release,
+	.dealloc = bpf_gtramp_link_dealloc,
+	.show_fdinfo = bpf_gtramp_link_show_fdinfo,
+};
+
+#define MAX_TRACING_MULTI_CNT	102400
+
+static int bpf_tracing_get_target(u32 fd, struct btf **tgt_btf)
+{
+	struct bpf_prog *prog = NULL;
+	struct btf *btf = NULL;
+
+	if (fd) {
+		prog = bpf_prog_get(fd);
+		if (!IS_ERR(prog)) {
+			/* the global trampoline link is ftrace based, bpf2bpf
+			 * is not supported for now.
+			 */
+			bpf_prog_put(prog);
+			return -EOPNOTSUPP;
+		}
+
+		/* "fd" is the fd of the kernel module BTF */
+		btf = btf_get_by_fd(fd);
+		if (IS_ERR(btf))
+			return PTR_ERR(btf);
+		if (!btf_is_kernel(btf)) {
+			btf_put(btf);
+			return -EOPNOTSUPP;
+		}
+	} else {
+		btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(btf))
+			return PTR_ERR(btf);
+		if (!btf)
+			return -EINVAL;
+		btf_get(btf);
+	}
+
+	*tgt_btf = btf;
+	return 0;
+}
+
+static int bpf_tracing_multi_link_check(const union bpf_attr *attr, u32 **btf_ids,
+					u32 **tgt_fds, u64 **cookies,
+					u32 cnt)
+{
+	void __user *ubtf_ids;
+	void __user *ubtf_fds;
+	void __user *ucookies;
+	void *tmp;
+	int i;
+
+	if (!cnt)
+		return -EINVAL;
+
+	if (cnt > MAX_TRACING_MULTI_CNT)
+		return -E2BIG;
+
+	ucookies = u64_to_user_ptr(attr->link_create.tracing_multi.cookies);
+	if (ucookies) {
+		tmp = kvmalloc_array(cnt, sizeof(**cookies), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		*cookies = tmp;
+		if (copy_from_user(tmp, ucookies, cnt * sizeof(**cookies)))
+			return -EFAULT;
+	}
+
+	ubtf_fds = u64_to_user_ptr(attr->link_create.tracing_multi.btf_fds);
+	if (ubtf_fds) {
+		tmp = kvmalloc_array(cnt, sizeof(**tgt_fds), GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+
+		*tgt_fds = tmp;
+		if (copy_from_user(tmp, ubtf_fds, cnt * sizeof(**tgt_fds)))
+			return -EFAULT;
+	}
+
+	ubtf_ids = u64_to_user_ptr(attr->link_create.tracing_multi.btf_type_ids);
+	if (!ubtf_ids)
+		return -EINVAL;
+
+	tmp = kvmalloc_array(cnt, sizeof(**btf_ids), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	*btf_ids = tmp;
+	if (copy_from_user(tmp, ubtf_ids, cnt * sizeof(**btf_ids)))
+		return -EFAULT;
+
+	for (i = 0; i < cnt; i++) {
+		if (!(*btf_ids)[i])
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int bpf_tracing_prog_attach_multi(const union bpf_attr *attr,
+					 struct bpf_prog *prog)
+{
+	u32 cnt, *btf_ids = NULL, *btf_fds = NULL;
+	struct bpf_gtramp_link *link = NULL;
+	struct bpf_link_primer link_primer;
+	u64 *cookies = NULL;
+	int err = 0, i;
+
+	if (prog->type != BPF_PROG_TYPE_TRACING || !bpf_is_tracing_multi(prog))
+		return -EINVAL;
+
+	cnt = attr->link_create.tracing_multi.cnt;
+	err = bpf_tracing_multi_link_check(attr, &btf_ids, &btf_fds, &cookies,
+					   cnt);
+	if (err)
+		goto err_out;
+
+	link = kzalloc(struct_size(link, entries, cnt), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	bpf_link_init(&link->link, BPF_LINK_TYPE_TRACING_MULTI,
+		      &bpf_gtramp_link_lops, prog,
+		      prog->expected_attach_type);
+
+	mutex_lock(&prog->aux->dst_mutex);
+	for (i = 0; i < cnt; i++) {
+		struct bpf_attach_target_info tgt_info = {};
+		struct bpf_gtramp_link_entry *entry;
+		u32 btf_fd, btf_id = btf_ids[i];
+		struct btf *tgt_btf = NULL;
+		int nr_regs;
+
+		entry = &link->entries[i];
+		btf_fd = btf_fds ? btf_fds[i] : 0;
+		err = bpf_tracing_get_target(btf_fd, &tgt_btf);
+		if (err)
+			goto err_out_unlock;
+
+		err = bpf_check_attach_target(NULL, prog, NULL, tgt_btf,
+					      btf_id, &tgt_info);
+		if (err)
+			goto err_out_unlock;
+
+		entry->cookie = cookies ? cookies[i] : 0;
+		entry->addr = (void *)tgt_info.tgt_addr;
+		entry->attach_mod = tgt_info.tgt_mod;
+		entry->attach_btf = tgt_btf;
+		entry->btf_id = btf_id;
+		link->entry_cnt++;
+
+		nr_regs = arch_bpf_get_regs_nr(&tgt_info.fmodel);
+		if (nr_regs < 0) {
+			err = nr_regs;
+			goto err_out_unlock;
+		}
+		entry->nr_args = nr_regs;
+	}
+
+	err = bpf_gtrampoline_link_prog(link);
+	if (err)
+		goto err_out_unlock;
+
+	err = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		bpf_gtrampoline_unlink_prog(link);
+		goto err_out_unlock;
+	}
+
+	mutex_unlock(&prog->aux->dst_mutex);
+	kfree(btf_ids);
+	kfree(btf_fds);
+	kfree(cookies);
+	return bpf_link_settle(&link_primer);
+err_out_unlock:
+	__bpf_gtramp_link_release(link);
+	mutex_unlock(&prog->aux->dst_mutex);
+err_out:
+	kfree(btf_ids);
+	kfree(btf_fds);
+	kfree(cookies);
+	kfree(link);
+	return err;
+}
+
 static void bpf_raw_tp_link_release(struct bpf_link *link)
 {
 	struct bpf_raw_tp_link *raw_tp =
@@ -4363,6 +4600,9 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
 	case BPF_MODIFY_RETURN:
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
+	case BPF_MODIFY_RETURN_MULTI:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_LSM_MAC:
 		return BPF_PROG_TYPE_LSM;
@@ -5716,6 +5956,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			ret = bpf_iter_link_attach(attr, uattr, prog);
 		else if (prog->expected_attach_type == BPF_LSM_CGROUP)
 			ret = cgroup_bpf_link_attach(attr, prog);
+		else if (bpf_is_tracing_multi(prog))
+			ret = bpf_tracing_prog_attach_multi(attr, prog);
 		else
 			ret = bpf_tracing_prog_attach(prog,
 						      attr->link_create.target_fd,
