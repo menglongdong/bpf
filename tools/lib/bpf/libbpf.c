@@ -135,6 +135,9 @@ static const char * const attach_type_name[] = {
 	[BPF_NETKIT_PEER]		= "netkit_peer",
 	[BPF_TRACE_KPROBE_SESSION]	= "trace_kprobe_session",
 	[BPF_TRACE_UPROBE_SESSION]	= "trace_uprobe_session",
+	[BPF_TRACE_FENTRY_MULTI]	= "trace_fentry_multi",
+	[BPF_TRACE_FEXIT_MULTI]		= "trace_fexit_multi",
+	[BPF_MODIFY_RETURN_MULTI]	= "modify_return_multi",
 };
 
 static const char * const link_type_name[] = {
@@ -153,6 +156,7 @@ static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_UPROBE_MULTI]		= "uprobe_multi",
 	[BPF_LINK_TYPE_NETKIT]			= "netkit",
 	[BPF_LINK_TYPE_SOCKMAP]			= "sockmap",
+	[BPF_LINK_TYPE_TRACING_MULTI]		= "tracing_multi",
 };
 
 static const char * const map_type_name[] = {
@@ -9821,6 +9825,7 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie, st
 static int attach_uprobe_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_iter(const struct bpf_program *prog, long cookie, struct bpf_link **link);
+static int attach_trace_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 
 static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("socket",		SOCKET_FILTER, 0, SEC_NONE),
@@ -9867,6 +9872,13 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("fentry.s+",		TRACING, BPF_TRACE_FENTRY, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
 	SEC_DEF("fmod_ret.s+",		TRACING, BPF_MODIFY_RETURN, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
 	SEC_DEF("fexit.s+",		TRACING, BPF_TRACE_FEXIT, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_trace),
+	SEC_DEF("tp_btf+",		TRACING, BPF_TRACE_RAW_TP, SEC_ATTACH_BTF, attach_trace),
+	SEC_DEF("fentry.multi+",	TRACING, BPF_TRACE_FENTRY_MULTI, SEC_NONE, attach_trace_multi),
+	SEC_DEF("fmod_ret.multi+",	TRACING, BPF_MODIFY_RETURN_MULTI, SEC_NONE, attach_trace_multi),
+	SEC_DEF("fexit.multi+",		TRACING, BPF_TRACE_FEXIT_MULTI, SEC_NONE, attach_trace_multi),
+	SEC_DEF("fentry.multi.s+",	TRACING, BPF_TRACE_FENTRY_MULTI, SEC_NONE | SEC_SLEEPABLE, attach_trace_multi),
+	SEC_DEF("fmod_ret.multi.s+",	TRACING, BPF_MODIFY_RETURN_MULTI, SEC_NONE | SEC_SLEEPABLE, attach_trace_multi),
+	SEC_DEF("fexit.multi.s+",	TRACING, BPF_TRACE_FEXIT_MULTI, SEC_NONE | SEC_SLEEPABLE, attach_trace_multi),
 	SEC_DEF("freplace+",		EXT, 0, SEC_ATTACH_BTF, attach_trace),
 	SEC_DEF("lsm+",			LSM, BPF_LSM_MAC, SEC_ATTACH_BTF, attach_lsm),
 	SEC_DEF("lsm.s+",		LSM, BPF_LSM_MAC, SEC_ATTACH_BTF | SEC_SLEEPABLE, attach_lsm),
@@ -11799,8 +11811,10 @@ bool glob_match(const char *str, const char *pat)
 struct kprobe_multi_resolve {
 	const char *pattern;
 	unsigned long *addrs;
+	char **syms;
 	size_t cap;
 	size_t cnt;
+	bool pattern_sym;
 };
 
 struct avail_kallsyms_data {
@@ -11910,6 +11924,14 @@ static int libbpf_available_kallsyms_parse(struct kprobe_multi_resolve *res)
 
 	/* sort available functions */
 	qsort(syms, cnt, sizeof(*syms), avail_func_cmp);
+
+	if (res->pattern_sym) {
+		res->syms = syms;
+		res->cnt = cnt;
+		fclose(f);
+
+		return 0;
+	}
 
 	data.syms = syms;
 	data.res = res;
@@ -13123,6 +13145,144 @@ static int attach_trace(const struct bpf_program *prog, long cookie, struct bpf_
 {
 	*link = bpf_program__attach_trace(prog);
 	return libbpf_get_error(*link);
+}
+
+struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *prog,
+						      const char *pattern,
+						      const struct bpf_trace_multi_opts *opts)
+{
+	__u32 *btf_ids, *btf_fds, *new_btf_ids = NULL, *new_btf_fds = NULL;
+	LIBBPF_OPTS(bpf_link_create_opts, link_opts);
+	struct kprobe_multi_resolve res = {
+		.pattern = pattern,
+		.pattern_sym = true,
+	};
+	int prog_fd, pfd, cnt, err = 0, i;
+	struct bpf_link *link = NULL;
+	char errmsg[STRERR_BUFSIZE];
+	const char **syms;
+
+	if (!OPTS_VALID(opts, bpf_trace_multi_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	prog_fd = bpf_program__fd(prog);
+	if (prog_fd < 0) {
+		pr_warn("prog '%s': can't attach before loaded\n", prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+
+	btf_ids = OPTS_GET(opts, btf_type_ids, 0);
+	btf_fds = OPTS_GET(opts, btf_fds, 0);
+	syms = OPTS_GET(opts, syms, 0);
+	cnt = OPTS_GET(opts, cnt, 0);
+
+	if (!syms && !pattern && !btf_ids)
+		return libbpf_err_ptr(-EINVAL);
+	if (pattern && (syms || btf_ids || cnt))
+		return libbpf_err_ptr(-EINVAL);
+	if (!pattern && !cnt)
+		return libbpf_err_ptr(-EINVAL);
+	if (syms && btf_ids)
+		return libbpf_err_ptr(-EINVAL);
+
+	if (pattern) {
+		err = libbpf_available_kallsyms_parse(&res);
+		if (err)
+			return libbpf_err_ptr(err);
+		syms = (const char **)res.syms;
+		cnt = res.cnt;
+	}
+
+	if (syms) {
+		int btf_obj_fd, btf_type_id;
+
+		if (btf_ids || btf_fds) {
+			pr_warn("can set both opts->syms and opts->btf_ids\n");
+			return libbpf_err_ptr(-EINVAL);
+		}
+
+		new_btf_ids = btf_ids = malloc(sizeof(*btf_ids) * cnt);
+		new_btf_fds = btf_fds = malloc(sizeof(*btf_fds) * cnt);
+		if (!btf_ids || !btf_fds) {
+			err = -ENOMEM;
+			goto err_free;
+		}
+		for (i = 0; i < cnt; i++) {
+			btf_obj_fd = btf_type_id = 0;
+
+			err = find_kernel_btf_id(prog->obj, syms[i],
+				prog->expected_attach_type, &btf_obj_fd,
+				&btf_type_id);
+			if (err)
+				goto err_free;
+			btf_ids[i] = btf_type_id;
+			btf_fds[i] = btf_obj_fd;
+		}
+		link_opts.tracing_multi.btf_type_ids = btf_ids;
+		link_opts.tracing_multi.btf_fds = btf_fds;
+	} else {
+		link_opts.tracing_multi.btf_type_ids = btf_ids;
+		link_opts.tracing_multi.btf_fds = btf_fds;
+	}
+
+	link = calloc(1, sizeof(*link));
+	if (!link) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+	link->detach = &bpf_link__detach_fd;
+
+	link_opts.tracing_multi.cookies = OPTS_GET(opts, cookies, 0);
+	link_opts.tracing_multi.cnt = cnt;
+
+	pfd = bpf_link_create(prog_fd, 0, bpf_program__expected_attach_type(prog), &link_opts);
+	if (pfd < 0) {
+		err = -errno;
+		pr_warn("prog '%s': failed to attach: %s\n",
+			prog->name, libbpf_strerror_r(pfd, errmsg, sizeof(errmsg)));
+		goto err_free;
+	}
+	link->fd = pfd;
+
+err_free:
+	free(new_btf_ids);
+	free(new_btf_fds);
+	for (i = 0; i < res.cnt; i++)
+		free(res.syms[i]);
+	free(res.syms);
+	if (!err)
+		return link;
+	free(link);
+	return libbpf_err_ptr(err);
+}
+
+static int attach_trace_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link)
+{
+	LIBBPF_OPTS(bpf_trace_multi_opts, opts);
+	const char *spec;
+	char *pattern;
+	int err, n;
+
+	/* no auto-attach if target is not specified */
+	if (strcmp(prog->sec_name, "fentry.multi") == 0 ||
+	    strcmp(prog->sec_name, "fexit.multi") == 0 ||
+	    strcmp(prog->sec_name, "modify_return.multi") == 0)
+		return 0;
+
+	spec = strchr(prog->sec_name, '/');
+	if (!spec || !*(++spec))
+		return -EINVAL;
+
+	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &pattern);
+	if (n < 1) {
+		pr_warn("kprobe multi pattern is invalid: %s\n", spec);
+		return -EINVAL;
+	}
+
+	*link = bpf_program__attach_trace_multi_opts(prog, pattern, &opts);
+	err = libbpf_get_error(*link);
+	free(opts.syms);
+	return err;
 }
 
 static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_link **link)
