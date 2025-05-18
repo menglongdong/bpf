@@ -14,6 +14,7 @@
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
 #include <linux/bpf_tramp.h>
+#include <linux/kfunc_md.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -30,6 +31,14 @@ static struct hlist_head trampoline_ip_table[TRAMPOLINE_TABLE_SIZE];
 
 /* serializes access to trampoline tables */
 static DEFINE_MUTEX(trampoline_mutex);
+struct bpf_tramp_image global_tr_image = {
+	.image = bpf_global_caller,
+};
+static struct bpf_trampoline global_tr = {
+	.cur_image = &global_tr_image,
+};
+static DEFINE_MUTEX(global_tr_lock);
+static const struct bpf_link_ops bpf_shim_tramp_link_lops;
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex);
@@ -63,6 +72,11 @@ static struct bpf_trampoline *direct_ops_ip_lookup(struct ftrace_ops *ops, unsig
 }
 #endif /* CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS */
 
+static bool bpf_is_gtramp_ip(unsigned long ip)
+{
+	return ftrace_find_rec_direct(ip) == (unsigned long)global_tr.cur_image->image;
+}
+
 static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 				     enum ftrace_ops_cmd cmd)
 {
@@ -70,8 +84,13 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 	int ret = 0;
 
 	tr = direct_ops_ip_lookup(ops, ip);
-	if (!tr)
+	if (!tr) {
+		struct kfunc_md *md = kfunc_md_get(ip);
+
+		if (md && md->bpf_prog_cnt)
+			return 0;
 		return -EINVAL;
+	}
 
 	bpf_trampoline_put(tr);
 	if (cmd == FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_SELF) {
@@ -850,6 +869,107 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
 	return err;
 }
 
+static int __bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link,
+					 u32 cnt)
+{
+	struct bpf_gtramp_link_entry *entry;
+	enum bpf_tramp_prog_type kind;
+	unsigned long *del_ips;
+	struct kfunc_md *md;
+	int err, j = 0;
+
+	del_ips = kmalloc_array(cnt, sizeof(*del_ips), GFP_KERNEL);
+	if (!del_ips)
+		return -ENOMEM;
+	kind = bpf_attach_type_to_tramp(link->link.prog);
+	/* remove the prog from all the coressponding md */
+	for (int i = 0; i < cnt; i++) {
+		entry = &link->entries[i];
+		md = kfunc_md_get(entry->ip);
+		err = kfunc_md_bpf_unlink(md, link->link.prog, kind);
+		kfunc_md_put(md);
+		if (err == 0)
+			del_ips[j++] = entry->ip;
+	}
+	err = j ? direct_ops_del(global_tr.fops, del_ips, global_tr.cur_image->image, j) : 0;
+	/* Update fail, the global trampoline on the target functions will
+	 * be released on the next using of tracing multi-link.
+	 */
+	WARN_ON_ONCE(err);
+	kfree(del_ips);
+
+	return err;
+}
+
+int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link)
+{
+	int err;
+
+	/* hold the global trampoline lock, to make the target functions
+	 * consist during we unlink the prog.
+	 */
+	mutex_lock(&global_tr_lock);
+	err = __bpf_gtrampoline_unlink_prog(link, link->entry_cnt);
+	mutex_unlock(&global_tr_lock);
+
+	return err;
+}
+
+int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link)
+{
+	struct bpf_gtramp_link_entry *entry;
+	enum bpf_tramp_prog_type kind;
+	unsigned long *add_ips;
+	int err = 0, i, j = 0;
+	struct bpf_prog *prog;
+	struct kfunc_md *md;
+
+	add_ips = kmalloc_array(link->entry_cnt, sizeof(*add_ips), GFP_KERNEL);
+	if (!add_ips)
+		return -ENOMEM;
+	prog = link->link.prog;
+	kind = bpf_attach_type_to_tramp(prog);
+
+	/* hold the global trampoline lock, to make the target functions
+	 * consist during we link the prog.
+	 */
+	mutex_lock(&global_tr_lock);
+
+	/* update the bpf prog to all the corresponding function metadata */
+	for (i = 0; i < link->entry_cnt; i++) {
+		entry = &link->entries[i];
+		entry->ip = ftrace_location(entry->ip);
+		if (!entry->ip) {
+			err = -ENOENT;
+			goto on_fallback;
+		}
+		md = kfunc_md_create(entry->ip, entry->nr_args);
+		if (!md) {
+			err = -ENOMEM;
+			goto on_fallback;
+		}
+		err = kfunc_md_bpf_link(md, prog, kind, entry->cookie);
+		if (err) {
+			kfunc_md_put(md);
+			goto on_fallback;
+		}
+		if (!bpf_is_gtramp_ip(entry->ip))
+			add_ips[j++] = entry->ip;
+	}
+
+	err = j ? direct_ops_add(global_tr.fops, add_ips, global_tr.cur_image->image, j) : 0;
+	if (err)
+		goto on_fallback;
+	mutex_unlock(&global_tr_lock);
+
+	return 0;
+on_fallback:
+	__bpf_gtrampoline_unlink_prog(link, i);
+	mutex_unlock(&global_tr_lock);
+
+	return err;
+}
+
 #if defined(CONFIG_CGROUP_BPF) && defined(CONFIG_BPF_LSM)
 static void bpf_shim_tramp_link_release(struct bpf_link *link)
 {
@@ -1314,6 +1434,10 @@ int __weak arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 static int __init init_trampolines(void)
 {
 	int i;
+
+#ifdef CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS
+	global_tr.fops = &direct_ops;
+#endif
 
 	for (i = 0; i < TRAMPOLINE_TABLE_SIZE; i++)
 		INIT_HLIST_HEAD(&trampoline_key_table[i]);
