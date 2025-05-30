@@ -1290,6 +1290,9 @@ static struct bpf_prog *bpf_migrate_filter(struct bpf_prog *fp)
 	}
 
 	/* 1st pass: calculate the new program length. */
+	/* 第一步，将cBPF风格的指令转为bpf_insn风格的eBPF风格的指令。这里的第三个
+	 * 参数为NULL，表示只计算新指令的长度，不分配内存。
+	 */
 	err = bpf_convert_filter(old_prog, old_len, NULL, &new_len,
 				 &seen_ld_abs);
 	if (err)
@@ -1297,6 +1300,7 @@ static struct bpf_prog *bpf_migrate_filter(struct bpf_prog *fp)
 
 	/* Expand fp for appending the new filter representation. */
 	old_fp = fp;
+	/* 重新分配BPF程序的空间 */
 	fp = bpf_prog_realloc(old_fp, bpf_prog_size(new_len), 0);
 	if (!fp) {
 		/* The old_fp is still around in case we couldn't
@@ -1310,6 +1314,7 @@ static struct bpf_prog *bpf_migrate_filter(struct bpf_prog *fp)
 	fp->len = new_len;
 
 	/* 2nd pass: remap sock_filter insns into bpf_insn insns. */
+	/* 这里才是真正的进行cBPF到eBPF转换的地方 */
 	err = bpf_convert_filter(old_prog, old_len, fp, &new_len,
 				 &seen_ld_abs);
 	if (err)

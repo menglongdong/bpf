@@ -14,6 +14,10 @@
 #include <linux/rcupdate_wait.h>
 #include <linux/poll.h>
 
+/* bpf struct ops的核心是map，即它是将信息保存到map中，然后再使用attach对map进行
+ * attach来生效的。
+ */
+
 struct bpf_struct_ops_value {
 	struct bpf_struct_ops_common_value common;
 	char data[] ____cacheline_aligned_in_smp;
@@ -368,6 +372,7 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 		return -EINVAL;
 	}
 
+	/* register_bpf_struct_ops里面定义的结构体，内嵌了type_id结构体的 */
 	value_id = btf_find_by_name_kind(btf, value_name,
 					 BTF_KIND_STRUCT);
 	if (value_id < 0) {

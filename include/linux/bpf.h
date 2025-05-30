@@ -2000,7 +2000,12 @@ struct btf_member;
  * @func_models: Func models
  */
 struct bpf_struct_ops {
+	/* 一种类型的struct_ops从某个层面上来说，更像是一种BPF TYPE，它会有自己的
+	 * verifier_ops，在加载的时候被调用，定义了这个struct_ops可以使用的helper
+	 * 函数
+	 */
 	const struct bpf_verifier_ops *verifier_ops;
+	/* 这个在当前struct_ops类型被注册的时候会被调用，用来初始化一些信息。 */
 	int (*init)(struct btf *btf);
 	int (*check_member)(const struct btf_type *t,
 			    const struct btf_member *member,
@@ -2008,13 +2013,22 @@ struct bpf_struct_ops {
 	int (*init_member)(const struct btf_type *t,
 			   const struct btf_member *member,
 			   void *kdata, const void *udata);
+	/* struct_ops对应的map被attach的时候，这个钩子函数会被调用 */
 	int (*reg)(void *kdata, struct bpf_link *link);
 	void (*unreg)(void *kdata, struct bpf_link *link);
 	int (*update)(void *kdata, void *old_kdata, struct bpf_link *link);
+	/* update map的时候被调用，用来检查对应的结构体里的数据是不是合法的 */
 	int (*validate)(void *kdata);
+	/* 相当于dummy类型的钩子函数，比如__bpf_ops_tcp_congestion_ops。struct_ops
+	 * 会根据btf type里的信息，来为每个钩子函数生成一个trampoline。
+	 */
 	void *cfi_stubs;
 	struct module *owner;
+	/* 这个名字是有讲究的，要使用对应的结构体的名字，因为需要通过这个名字来找到对应
+	 * 的结构体的BTF信息。
+	 */
 	const char *name;
+	/* struct_ops类型注册的时候被初始化，bpf struct中的每个钩子函数的类型信息。 */
 	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
 };
 
@@ -2032,9 +2046,14 @@ struct bpf_struct_ops_arg_info {
 };
 
 struct bpf_struct_ops_desc {
+	/* 这个是通用的struct_ops的操作ops函数 */
 	struct bpf_struct_ops *st_ops;
 
+	/* BPF程序要使用的结构体，如tcp_congestion_ops */
 	const struct btf_type *type;
+	/* 内嵌tcp_congestion_ops的结构体，里面还包含一个struct bpf_struct_ops_common_value，
+	 * 看下面register_bpf_struct_ops的定义。
+	 */
 	const struct btf_type *value_type;
 	u32 type_id;
 	u32 value_id;

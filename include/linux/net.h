@@ -228,6 +228,9 @@ struct proto_ops {
 #define DECLARE_SOCKADDR(type, dst, src)	\
 	type dst = ({ __sockaddr_check_size(sizeof(*dst)); (type) src; })
 
+/* 这个是用来描述协议族的结构体，唯一调用的地方是__sock_create里面，在创建套接口的时候
+ * 会被调用。具体协议的管理，每个协议族会自己管理自己的所有的协议所对应的proto_ops。
+ */
 struct net_proto_family {
 	int		family;
 	int		(*create)(struct net *net, struct socket *sock,

@@ -266,6 +266,9 @@ struct btf {
 	refcount_t refcnt;
 	u32 id;
 	struct rcu_head rcu;
+	/* 每个btf上面存储的当前的模块上的所有的kfunc信息。这里维护了一个kfunc的数组，
+	 * 对应着每种BPF类型可以使用的kfunc。
+	 */
 	struct btf_kfunc_set_tab *kfunc_set_tab;
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
 	struct btf_struct_metas *struct_meta_tab;
@@ -8850,7 +8853,7 @@ static bool __btf_kfunc_is_allowed(const struct btf *btf,
 
 	return true;
 }
-
+/* 将 BPF prog type 映射到对应的 kfunc hook 分组。 */
 static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 {
 	switch (prog_type) {

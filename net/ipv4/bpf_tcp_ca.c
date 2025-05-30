@@ -341,7 +341,18 @@ static int __init bpf_tcp_ca_kfunc_init(void)
 {
 	int ret;
 
+	/* 先注册我们给tcp_ca新增的那些kfunc函数，是按照BPF_PROG_TYPE_STRUCT_OPS
+	 * 来注册的。然后再注册bpf_tcp_congestion_ops。
+	 */
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_tcp_ca_kfunc_set);
+	/* 这里在注册的时候，会创建一个bpf_struct_ops_tcp_congestion_ops结构体，
+	 * 并将tcp_congestion_ops结构体内嵌在里面。这个结构体是面向用户的，即用户的
+	 * BPF程序里面会牵扯到这里的结构体。前面那个bpf_tcp_congestion_ops是用于
+	 * 管理当前的tcp_ca的一些操作的，比如注册、注销、更新等。
+	 *
+	 * 这里会把这个bpf_tcp_congestion_ops结构体注册到btf->struct_ops_tab.ops
+	 * 数组中的，后续也是根据"tcp_congestion_ops"这个名字来查找的。
+	 */
 	ret = ret ?: register_bpf_struct_ops(&bpf_tcp_congestion_ops, tcp_congestion_ops);
 
 	return ret;
