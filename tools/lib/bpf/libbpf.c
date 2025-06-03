@@ -1176,9 +1176,15 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	const char *tname;
 	int err;
 
+	/* 这里根据bpf里定义的结构体的id找到name，然后又根据name来找到对应的内核里
+	 * 结构体的id和type。这样就可以找到内核里对应的结构体的btf类型。
+	 */
 	st_ops = map->st_ops;
 	type = btf__type_by_id(btf, st_ops->type_id);
 	tname = btf__name_by_offset(btf, type->name_off);
+	/* 根据name来查找对应的内核的结构体type，以及vtype。并且找出了type在
+	 * vtype中的成员。
+	 */
 	err = find_struct_ops_kern_types(obj, tname, &mod_btf,
 					 &kern_type, &kern_type_id,
 					 &kern_vtype, &kern_vtype_id,
@@ -1191,6 +1197,9 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	pr_debug("struct_ops init_kern %s: type_id:%u kern_type_id:%u kern_vtype_id:%u\n",
 		 map->name, st_ops->type_id, kern_type_id, kern_vtype_id);
 
+	/* 利用查找到的type、vtype中的信息，来初始化map中的一些信息。 并且，分配
+	 * 对应的vtype的内存，用来存储bpf中对应的函数指针。
+	 */
 	map->mod_btf_fd = mod_btf ? mod_btf->fd : -1;
 	map->def.value_size = kern_vtype->size;
 	map->btf_vmlinux_value_type_id = kern_vtype_id;
@@ -1199,6 +1208,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	if (!st_ops->kern_vdata)
 		return -ENOMEM;
 
+	/* 这个字段会在open阶段被初始化，对应的函数为bpf_object_init_struct_ops */
 	data = st_ops->data;
 	kern_data_off = kern_data_member->offset / 8;
 	kern_data = st_ops->kern_vdata + kern_data_off;
@@ -8569,6 +8579,9 @@ static int bpf_object__read_kallsyms_file(struct bpf_object *obj)
 	return libbpf_kallsyms_parse(kallsyms_cb, obj);
 }
 
+/* 这个函数和find_kernel_btf_id类似，只不过这个更简单一点，没有通过name指定mod
+ * 的功能。
+ */
 static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
 			    __u16 kind, struct btf **res_btf,
 			    struct module_btf **res_mod_btf)
@@ -8957,6 +8970,7 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 	err = err ? : bpf_object__load_vmlinux_btf(obj, false);
 	err = err ? : bpf_object__resolve_externs(obj, obj->kconfig);
 	err = err ? : bpf_object__sanitize_maps(obj);
+	/* 准备好struct_ops类型的map需要的数据 */
 	err = err ? : bpf_object__init_kern_struct_ops_maps(obj);
 	err = err ? : bpf_object_adjust_struct_ops_autoload(obj);
 	/* 进行BPF程序的重定位。这里的重定位包括传统的重定位（map访问等），还进行了

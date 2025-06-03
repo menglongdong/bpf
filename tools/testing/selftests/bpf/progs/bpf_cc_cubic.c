@@ -165,6 +165,9 @@ __u32 BPF_PROG(bpf_cubic_undo_cwnd, struct sock *sk)
 	return tcp_reno_undo_cwnd(sk);
 }
 
+/* 这里会根据.struct_ops的描述，来定义一个struct_ops的map，并在load期间，使用
+ * bpf_map__init_kern_struct_ops进行map信息的初始化。
+ */
 SEC(".struct_ops")
 struct tcp_congestion_ops cc_cubic = {
 	.init		= (void *)bpf_cubic_init,

@@ -2007,15 +2007,18 @@ struct bpf_struct_ops {
 	const struct bpf_verifier_ops *verifier_ops;
 	/* 这个在当前struct_ops类型被注册的时候会被调用，用来初始化一些信息。 */
 	int (*init)(struct btf *btf);
+	/* verify期间被调用的，用来检查某个BPF程序是否可以attach到某个field上面 */
 	int (*check_member)(const struct btf_type *t,
 			    const struct btf_member *member,
 			    const struct bpf_prog *prog);
+	/* update map的时候被调用，用来遍历初始化所有的field上的信息。 */
 	int (*init_member)(const struct btf_type *t,
 			   const struct btf_member *member,
 			   void *kdata, const void *udata);
 	/* struct_ops对应的map被attach的时候，这个钩子函数会被调用 */
 	int (*reg)(void *kdata, struct bpf_link *link);
 	void (*unreg)(void *kdata, struct bpf_link *link);
+	/* 更新link的时候被调用。这也是bpf_link_ops上面的update_map的字段的作用 */
 	int (*update)(void *kdata, void *old_kdata, struct bpf_link *link);
 	/* update map的时候被调用，用来检查对应的结构体里的数据是不是合法的 */
 	int (*validate)(void *kdata);
