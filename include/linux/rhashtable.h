@@ -758,6 +758,7 @@ static __always_inline struct rhlist_head *rhltable_lookup_likely(
  * function returns the existing element already in hashes if there is a clash,
  * otherwise it returns an error via ERR_PTR().
  */
+/* 插入哈希对象；若 key 冲突则返回已存在对象。 */
 static __always_inline void *__rhashtable_insert_fast(
 	struct rhashtable *ht, const void *key, struct rhash_head *obj,
 	const struct rhashtable_params params, bool rhlist)
@@ -1012,6 +1013,7 @@ static __always_inline void *rhashtable_lookup_get_insert_fast(
  *
  * Returns zero on success.
  */
+/* 根据显式 key 查找并插入对象。 */
 static __always_inline int rhashtable_lookup_insert_key(
 	struct rhashtable *ht, const void *key, struct rhash_head *obj,
 	const struct rhashtable_params params)
@@ -1038,6 +1040,7 @@ static __always_inline int rhashtable_lookup_insert_key(
  * object if it exists, NULL if it does not and the insertion was successful,
  * and an ERR_PTR otherwise.
  */
+/* 根据显式 key 查找并插入对象，返回旧对象或 NULL。 */
 static __always_inline void *rhashtable_lookup_get_insert_key(
 	struct rhashtable *ht, const void *key, struct rhash_head *obj,
 	const struct rhashtable_params params)

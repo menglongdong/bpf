@@ -55,14 +55,24 @@ typedef int (*rht_obj_cmpfn_t)(struct rhashtable_compare_arg *arg,
  * @obj_cmpfn: Function to compare key with object
  */
 struct rhashtable_params {
+	/* 类似于哈希表的初始尺寸，如果为0的话，初始尺寸为64 */
 	u16			nelem_hint;
+	/* key的长度和key在obj中的偏移 */
 	u16			key_len;
 	u16			key_offset;
+	/* rhash_node在结构体中的偏移 */
 	u16			head_offset;
 	unsigned int		max_size;
 	u16			min_size;
 	bool			automatic_shrinking;
+	/* 没有指定的话，会被设置为jhash()。如果key_len为4的倍数，那么这里会被默认设置
+	 * 为rhashtable_jhash2()
+	 */
 	rht_hashfn_t		hashfn;
+	/* 这个和上面那个到底有啥区别？好像指定了这个，就不需要指定key_len和hashfn了。
+	 * 因为这个函数是直接根据obj来计算hash的。而且如果指定了这个函数的话，
+	 * obj_cmpfn也必须指定。
+	 */
 	rht_obj_hashfn_t	obj_hashfn;
 	rht_obj_cmpfn_t		obj_cmpfn;
 };
@@ -88,6 +98,7 @@ struct rhashtable {
 	struct work_struct		run_work;
 	struct mutex                    mutex;
 	spinlock_t			lock;
+	/* 哈希表中当前元素的个数 */
 	atomic_t			nelems;
 #ifdef CONFIG_MEM_ALLOC_PROFILING
 	struct alloc_tag		*alloc_tag;

@@ -67,6 +67,7 @@
  *
  * Returns the hash value of the key. The result depends on endianness.
  */
+/* 这个函数用于对一段内存进行哈希计算，这个内存是个没有什么规律的随意内存 */
 static inline u32 jhash(const void *key, u32 length, u32 initval)
 {
 	u32 a, b, c;

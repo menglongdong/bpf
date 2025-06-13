@@ -607,8 +607,10 @@ struct skb_shared_info {
 	__u8		meta_len;
 	__u8		nr_frags;
 	__u8		tx_flags;
+	/* 这个一般是mss，存在gso的情况下才会设置这个值，一般在TCP要把数据传递给L3的时候设置 */
 	unsigned short	gso_size;
 	/* Warning: this field is not always filled in (UFO)! */
+	/* 当前skb的gso的段数，一般是skb->len/mss */
 	unsigned short	gso_segs;
 	/* skb链表，一般用于IP分片 */
 	struct sk_buff	*frag_list;

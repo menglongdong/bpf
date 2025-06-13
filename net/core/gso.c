@@ -227,6 +227,7 @@ static inline bool skb_gso_size_check(const struct sk_buff *skb,
 	const struct skb_shared_info *shinfo = skb_shinfo(skb);
 	const struct sk_buff *iter;
 
+	/* 这里的seg_len是加上L3/L4头部后的seg应该保持的长度 */
 	if (shinfo->gso_size != GSO_BY_FRAGS)
 		return seg_len <= max_len;
 

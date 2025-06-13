@@ -478,7 +478,7 @@ int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMREQDS);
 
-	/* 进行IP分片的重组 */
+	/* 进行IP分片的重组。这里使用了rhashtable的方式来维护IP分片信息的。 */
 
 	/* Lookup (or create) queue header */
 	rcu_read_lock();
