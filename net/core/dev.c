@@ -6857,6 +6857,9 @@ void __napi_schedule_irqoff(struct napi_struct *n)
 }
 EXPORT_SYMBOL(__napi_schedule_irqoff);
 
+/* 这个函数在某个napi上面的网络报文被收完的情况下会被调用。当这个函数的返回值为false的
+ * 时候，表示napi还需要继续处理网络报文，网卡上的中断会被disable掉。
+ */
 bool napi_complete_done(struct napi_struct *n, int work_done)
 {
 	unsigned long flags, val, new, timeout = 0;
@@ -6872,11 +6875,18 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 				 NAPIF_STATE_IN_BUSY_POLL)))
 		return false;
 
+	/* 如果当前处理了报文，并且设置了gro flush超时时间，那么不进行报文的上送，而是
+	 * 继续等待gro flush超时。
+	 */
 	if (work_done) {
 		if (n->gro.bitmask)
 			timeout = napi_get_gro_flush_timeout(n);
 		n->defer_hard_irqs_count = napi_get_defer_hard_irqs(n);
 	}
+	/* 如果设置了defer_hard_irqs_count，那么这里会关闭硬中断。超时时间还是取的
+	 * napi_get_gro_flush_timeout()，在超时后会进行网络收包。直到这里的
+	 * defer_hard_irqs_count归0后，才会打开硬中断。
+	 */
 	if (n->defer_hard_irqs_count > 0) {
 		n->defer_hard_irqs_count--;
 		timeout = napi_get_gro_flush_timeout(n);
@@ -6920,6 +6930,9 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 		return false;
 	}
 
+	/* 设置定时器。定时器超时后，napi_watchdog函数会被调用。这个函数会唤醒软中断
+	 * 进行报文的处理。
+	 */
 	if (timeout)
 		hrtimer_start(&n->timer, ns_to_ktime(timeout),
 			      HRTIMER_MODE_REL_PINNED);

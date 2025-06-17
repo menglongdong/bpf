@@ -51,6 +51,10 @@ struct bpf_struct_ops_map {
 	 * the bpf_prog's id is stored instead of the kernel
 	 * address of a func ptr.
 	 */
+	/* 这个是和用户态相对应的vdata，下面那个是内核对应的vdata。区别就在于。，这个存储
+	 * 的是用户态传递下来的数据，里面比如bpf prog存的都是prog的id，而下面的那个里面
+	 * 存储的是真正的bpf prog的地址。
+	 */
 	struct bpf_struct_ops_value *uvalue;
 	/* kvalue.data stores the actual kernel's struct
 	 * (e.g. tcp_congestion_ops) that will be
@@ -710,13 +714,16 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	if (flags)
 		return -EINVAL;
 
+	/* struct_ops类型的map里面只能有一个对象，就是vdata */
 	if (*(u32 *)key != 0)
 		return -E2BIG;
 
+	/* 利用btf type信息检查是否存在不合法的字段，这里的value_type是vdata的type */
 	err = check_zero_holes(st_map->btf, st_ops_desc->value_type, value);
 	if (err)
 		return err;
 
+	/* 检查具体的struct是否有不合法的字段，这里的uvalue->data是data */
 	uvalue = value;
 	err = check_zero_holes(st_map->btf, t, uvalue->data);
 	if (err)
@@ -746,6 +753,9 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 
 	plink = st_map->links;
 	pksym = st_map->ksyms;
+	/* 进行合法性的检查。这里会进行struct的所有的成员的遍历，找到对应的成员的name、
+	 * btf type等信息。
+	 */
 	tname = btf_name_by_offset(st_map->btf, t->name_off);
 	module_type = btf_type_by_id(btf_vmlinux, st_ops_ids[IDX_MODULE_ID]);
 	for_each_member(i, t, member) {
@@ -758,6 +768,9 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		moff = __btf_member_bit_offset(t, member) / 8;
 		mname = btf_name_by_offset(st_map->btf, member->name_off);
 		ptype = btf_type_resolve_ptr(st_map->btf, member->type, NULL);
+		/* 检查当前这个成员的类型是不是内核模块struct module，如果是的话就将其
+		 * 设置为BPF_MODULE_OWNER。有些struct_ops会有一个owner的成员。
+		 */
 		if (ptype == module_type) {
 			if (*(void **)(udata + moff))
 				goto reset_unlock;
@@ -765,6 +778,11 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			continue;
 		}
 
+		/* 调用当前struct_ops上的钩子函数来进行成员的init初始化。每个struct_ops的
+		 * 逻辑不一样，具体可以去参考bpf_tcp_ca_init_member的逻辑。这里应该
+		 * 是只针对一些特殊情况的处理，正常的函数指针成员的处理逻辑
+		 * 都是在下面的逻辑。
+		 */
 		err = st_ops->init_member(t, member, kdata, udata);
 		if (err < 0)
 			goto reset_unlock;
@@ -778,7 +796,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		 * here.  Reject everything else.
 		 */
 
-		/* All non func ptr member must be 0 */
+		/* 如果成员字段不是函数，那么它必须为0 */
 		if (!ptype || !btf_type_is_func_proto(ptype)) {
 			u32 msize;
 
@@ -797,6 +815,11 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			continue;
 		}
 
+		/* 下面的逻辑就是，从udata里面取出对应的bpf prog的id，然后找到对应的
+		 * 函数的地址，并将其存储到kdata里面。这个过程中，会为当前的成员创建
+		 * 一个trampoline以及对应的bpf_tramp_link，然后将其存取到
+		 * st_map->links中。
+		 */
 		prog_fd = (int)(*(unsigned long *)(udata + moff));
 		/* Similar check as the attr->attach_prog_fd */
 		if (!prog_fd)
@@ -837,6 +860,16 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		*pksym++ = ksym;
 
 		trampoline_start = image_off;
+		/* 为当前的函数成员生成一个trampoline，这个trampoline会调用当前成员
+		 * 函数对应的bpf prog，这里的origin function取的是cfi_stubs里面
+		 * 存储的函数地址，相当于一个dummy。
+		 *
+		 * 然后它将trampoline的地址存储到kdata中。 为什么这里不直接调用bpf prog呢，
+		 * 创建的这个trampoline的作用是什么呢？难道就是为了能够像tracing那样
+		 * 进行参数访问？这里应该是由于bpf prog其实走的还是tracing的那一套
+		 * verifier，即bpf prog在load的时候会检查其和目标函数的兼容性的，
+		 * 所以参数访问也要走tracing的那一套逻辑。
+		 */
 		err = bpf_struct_ops_prepare_trampoline(tlinks, link,
 						&st_ops->func_models[i],
 						*(void **)(st_ops->cfi_stubs + moff),
@@ -863,6 +896,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 					 ksym);
 	}
 
+	/* 调用特定的struct_ops当的validate函数，检查参数是否合法的。 */
 	if (st_ops->validate) {
 		err = st_ops->validate(kdata);
 		if (err)
@@ -875,6 +909,11 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			goto reset_unlock;
 	}
 
+	/* 看样子如果有这个标志，那么就啥也不干，因为link attach的时候会进行register。
+	 * 否则的话，就会调用st_ops->reg()来进行注册。对于tcp_congestion_ops而言，
+	 * 它会调用tcp_register_congestion_control来将当前的拥塞控制算法更新到
+	 * 系统里。注意，这里一旦注册完成了，就是使能了这个struct_ops。
+	 */
 	if (st_map->map.map_flags & BPF_F_LINK) {
 		err = 0;
 		/* Let bpf_link handle registration & unregistration.
@@ -1375,6 +1414,7 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 
 	st_map = (struct bpf_struct_ops_map *)map;
 
+	/* 检查当前的struct_ops是不是已经register完成了。 */
 	if (!bpf_struct_ops_valid_to_reg(map)) {
 		err = -EINVAL;
 		goto err_out;

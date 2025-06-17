@@ -120,6 +120,7 @@ struct btf_array {
  * of btf_member is stored in the vlen (of the info in
  * "struct btf_type").
  */
+/* 代表结构体的成员字段 */
 struct btf_member {
 	__u32	name_off;
 	__u32	type;

@@ -520,6 +520,7 @@ struct bpf_struct_ops {
 	struct bpf_program **progs;
 	__u32 *kern_func_off;
 	/* e.g. struct tcp_congestion_ops in bpf_prog's btf format */
+	/* 用户态的bpf prog信息，和struct里的field是一一对应的关系。 */
 	void *data;
 	/* e.g. struct bpf_struct_ops_tcp_congestion_ops in
 	 *      btf_vmlinux's format.
@@ -531,6 +532,7 @@ struct bpf_struct_ops {
 	 * bpf_map__init_kern_struct_ops() will populate the "kern_vdata"
 	 * from "data".
 	 */
+	/* 内核态的对象，会在map update的时候被加载到内核中。 */
 	void *kern_vdata;
 	__u32 type_id;
 };
@@ -1176,8 +1178,13 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	const char *tname;
 	int err;
 
-	/* 这里根据bpf里定义的结构体的id找到name，然后又根据name来找到对应的内核里
+	/* 这个函数在obj的load期间被调用，在正式的load到内核之前，进行struct_ops的
+	 * 数据的初始化。
+	 *
+	 * 这里根据bpf里定义的结构体的id找到name，然后又根据name来找到对应的内核里
 	 * 结构体的id和type。这样就可以找到内核里对应的结构体的btf类型。
+	 *
+	 * 整个函数的作用其实是进行vdata的初始化。
 	 */
 	st_ops = map->st_ops;
 	type = btf__type_by_id(btf, st_ops->type_id);
@@ -1208,12 +1215,15 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	if (!st_ops->kern_vdata)
 		return -ENOMEM;
 
-	/* 这个字段会在open阶段被初始化，对应的函数为bpf_object_init_struct_ops */
+	/* 这个字段会在open阶段被初始化，对应的函数为 bpf_object_init_struct_ops。
+	 * 里面的各个字段会被设置为对应的prog对象的地址。
+	 */
 	data = st_ops->data;
 	kern_data_off = kern_data_member->offset / 8;
 	kern_data = st_ops->kern_vdata + kern_data_off;
 
 	member = btf_members(type);
+	/* 遍历这个用户态的struct中所有的成员字段（函数指针）， */
 	for (i = 0; i < btf_vlen(type); i++, member++) {
 		const struct btf_type *mtype, *kern_mtype;
 		__u32 mtype_id, kern_mtype_id;
@@ -1225,6 +1235,10 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		const char *mname;
 
 		mname = btf__name_by_offset(btf, member->name_off);
+		/* 获取这个成员在结构体中的字节偏移，原来的是bit偏移。根据偏移，从data
+		 * 中获取对应这个成员的指针。这里的data是用户态的struct_ops
+		 * 结构体的内存。
+		 */
 		moff = member->offset / 8;
 		mdata = data + moff;
 		msize = btf__resolve_size(btf, member->type);
@@ -1234,6 +1248,10 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			return msize;
 		}
 
+		/* 找到对应的内核的结构体里的成员字段。如果用户态存在，但是内核不存在，这个
+		 * 是允许的，只要其对应的指针为NULL。这个是为了兼容内核版本的变化，
+		 * 例如内核升级了，用户态的结构体有了新的成员，但是内核没有这个成员。
+		 */
 		kern_member = find_member_by_name(kern_btf, kern_type, mname);
 		if (!kern_member) {
 			if (!libbpf_is_mem_zeroed(mdata, msize)) {
@@ -1260,6 +1278,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			continue;
 		}
 
+		/* 检查当前的field是不是bitfield，这种情况下是不支持的。 */
 		kern_member_idx = kern_member - btf_members(kern_type);
 		if (btf_member_bitfield_size(type, i) ||
 		    btf_member_bitfield_size(kern_type, kern_member_idx)) {
@@ -1268,9 +1287,13 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			return -ENOTSUP;
 		}
 
+		/* 找到内核对应的结构体的field的偏移，以及vdata对应的地址。 */
 		kern_moff = kern_member->offset / 8;
 		kern_mdata = kern_data + kern_moff;
 
+		/* 获取用户态的成员的btf type，并检查其和内核态中的type是不是完全一致的。
+		 * 这里的mtype->info包含了很多信息，包括type的kind、参数个数等。
+		 */
 		mtype = skip_mods_and_typedefs(btf, member->type, &mtype_id);
 		kern_mtype = skip_mods_and_typedefs(kern_btf, kern_member->type,
 						    &kern_mtype_id);
@@ -1296,12 +1319,14 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			if (!prog)
 				continue;
 
+			/* 检查这个prog是属于当前这个obj的，同时是BPF_PROG_TYPE_STRUCT_OPS类型的 */
 			if (!is_valid_st_ops_program(obj, prog)) {
 				pr_warn("struct_ops init_kern %s: member %s is not a struct_ops program\n",
 					map->name, mname);
 				return -ENOTSUP;
 			}
 
+			/* 根据函数指针的type，获取到对应的函数的type，并检查其是否是函数类型。 */
 			kern_mtype = skip_mods_and_typedefs(kern_btf,
 							    kern_mtype->type,
 							    &kern_mtype_id);
@@ -1345,6 +1370,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 				return -EINVAL;
 			}
 
+			/* 获取对应的函数在vdata中的偏移。 */
 			st_ops->kern_func_off[i] = kern_data_off + kern_moff;
 
 			pr_debug("struct_ops init_kern %s: func ptr %s is set to prog %s from data(+%u) to kern_data(+%u)\n",
@@ -1354,6 +1380,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			continue;
 		}
 
+		/* 针对不是函数指针的情况，看起来struct_ops里面也是可以指定普通的数据字段的。 */
 		kern_msize = btf__resolve_size(kern_btf, kern_mtype_id);
 		if (kern_msize < 0 || msize != kern_msize) {
 			pr_warn("struct_ops init_kern %s: Error in size of member %s: %zd != %zd(kernel)\n",
@@ -13580,7 +13607,7 @@ struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
 	if (!link)
 		return libbpf_err_ptr(-EINVAL);
 
-	/* kern_vdata should be prepared during the loading phase. */
+	/* 用vdata里的数据来更新map，vdata在load期间完成了数据的初始化 */
 	err = bpf_map_update_elem(map->fd, &zero, map->st_ops->kern_vdata, 0);
 	/* It can be EBUSY if the map has been used to create or
 	 * update a link before.  We don't allow updating the value of
@@ -13601,6 +13628,7 @@ struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map)
 		return &link->link;
 	}
 
+	/* 将map进行attach */
 	fd = bpf_link_create(map->fd, 0, BPF_STRUCT_OPS, NULL);
 	if (fd < 0) {
 		free(link);

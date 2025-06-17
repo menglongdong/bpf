@@ -395,6 +395,9 @@ struct napi_struct {
 	struct list_head	poll_list;
 
 	int			weight;
+	/* 禁用硬中断，直到napi_get_gro_flush_timeout() * defer_hard_irqs_count
+	 * 时间内当前网卡没有收到任何报文。这个过程中如果收到了报文，那么会重置这个参数。
+	 */
 	u32			defer_hard_irqs_count;
 	int			(*poll)(struct napi_struct *, int);
 #ifdef CONFIG_NETPOLL
