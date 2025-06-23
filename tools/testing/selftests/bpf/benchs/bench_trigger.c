@@ -114,6 +114,11 @@ static void *trigger_producer(void *input)
 	return NULL;
 }
 
+/* 这里是进行bench的触发。这里运行了raw_tp类型的bpf test，最终会运行__bpf_prog_test_run_raw_tp，
+ * 这个里面会运行当前的BPF程序。而trigger_driver这个BPF程序本身会调用batch_iters
+ * 次bpf_get_numa_node_id()内核函数，所以等待测试的BPF程序只需要attach到这个函数
+ * 上面，就会被触发调用。
+ */
 static void *trigger_producer_batch(void *input)
 {
 	int fd = ctx.driver_prog_fd ?: bpf_program__fd(ctx.skel->progs.trigger_driver);
@@ -613,6 +618,8 @@ const struct bench bench_trig_syscall_count = {
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
 };
+
+/* 这里的测试程序是直接 */
 
 /* batched (staying mostly in kernel) kprobe/fentry benchmarks */
 #define BENCH_TRIG_KERNEL(KIND, NAME)					\
