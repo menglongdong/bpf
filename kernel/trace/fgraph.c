@@ -694,6 +694,9 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 	 * return_hooker。
 	 */
 
+	/* 这个是检查是否存在ftrace递归调用的情况，防止陷入循环。同时，这里会关闭
+	 * 抢占，这也就意味着不能进行CPU迁移的。
+	 */
 	bit = ftrace_test_recursion_trylock(func, ret);
 	if (bit < 0)
 		return -EBUSY;

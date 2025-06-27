@@ -856,6 +856,9 @@ int register_fprobe_ips(struct fprobe *fp, unsigned long *addrs, int num)
 	struct fprobe_hlist *hlist_array;
 	int ret, i;
 
+	/* 这里的init用来确认每个地址都在rec中存在，然后分配fp->hlist_array，并将
+	 * 所有的地址都加入到hlist_array->array中。
+	 */
 	ret = fprobe_init(fp, addrs, num);
 	if (ret)
 		return ret;
@@ -943,6 +946,12 @@ int unregister_fprobe(struct fprobe *fp)
 	unsigned long *addrs = NULL;
 	int ret = 0, i, count;
 
+	/* fprobe的卸载过程。首先，遍历当前fp中所有的地址，并将其从哈希表中删除，并且
+	 * 将这些地址保存到一个数组中。然后，将这些地址从fgraph中移除。最后，释放整个
+	 * hlist_array。
+	 *
+	 * 使用fp和hlist的地方没有使用rcu进行保护，因此这里是有出现并发问题的风险的。
+	 */
 	mutex_lock(&fprobe_mutex);
 	if (!fp || !is_fprobe_still_exist(fp)) {
 		ret = -EINVAL;

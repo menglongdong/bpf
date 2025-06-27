@@ -25254,6 +25254,9 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 		}
 	}
 
+	/* 这里根据BPF的目标函数，来查找对应的STRUCT_OPS的结构体。然后根据BPF程序的名称
+	 * 来找到对应的成员字段。
+	 */
 	btf_id = prog->aux->attach_btf_id;
 	st_ops_desc = bpf_struct_ops_find(btf, btf_id);
 	if (!st_ops_desc) {
