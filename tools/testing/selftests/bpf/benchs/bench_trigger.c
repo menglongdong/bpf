@@ -4,6 +4,7 @@
 #include <argp.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <bpf/btf.h>
 #include "bpf_util.h"
 #include "bench.h"
 #include "trigger_bench.skel.h"
@@ -285,12 +286,64 @@ static void trigger_kretprobe_multi_all_setup(void)
 	attach_bpf(prog);
 }
 
+static void trigger_fentry_multi_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.bench_trigger_fentry_multi, true);
+	load_ctx();
+	attach_bpf(ctx.skel->progs.bench_trigger_fentry_multi);
+}
+
+static void trigger_fentry_multi_all_setup(void)
+{
+	LIBBPF_OPTS(bpf_trace_multi_opts, opts);
+	struct bpf_program *empty, *prog;
+	struct bpf_link *link;
+	struct btf *btf;
+	size_t cnt = 0;
+
+	setup_ctx();
+	empty = ctx.skel->progs.bench_trigger_fentry_multi_empty;
+	prog = ctx.skel->progs.bench_trigger_fentry_multi;
+	bpf_program__set_autoload(empty, true);
+	bpf_program__set_autoload(prog, true);
+	load_ctx();
+
+	btf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(btf)) {
+		fprintf(stderr, "failed to load vmlinux btf\n");
+		exit(1);
+	}
+	if (bpf_get_btf_type_ids(btf, &opts.btf_type_ids, &cnt)) {
+		printf("failed to get ksyms\n");
+		exit(1);
+	}
+
+	printf("found %zu ksyms\n", cnt);
+	opts.cnt = cnt;
+	link = bpf_program__attach_trace_multi_opts(empty, NULL, &opts);
+	if (!link) {
+		printf("failed to attach bench_trigger_fentry_multi to all\n");
+		exit(1);
+	}
+	ctx.skel->links.bench_trigger_fentry_multi = link;
+	attach_bpf(prog);
+}
+
 static void trigger_fexit_setup(void)
 {
 	setup_ctx();
 	bpf_program__set_autoload(ctx.skel->progs.bench_trigger_fexit, true);
 	load_ctx();
 	attach_bpf(ctx.skel->progs.bench_trigger_fexit);
+}
+
+static void trigger_fexit_multi_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.bench_trigger_fexit_multi, true);
+	load_ctx();
+	attach_bpf(ctx.skel->progs.bench_trigger_fexit_multi);
 }
 
 static void trigger_fmodret_setup(void)
@@ -303,6 +356,18 @@ static void trigger_fmodret_setup(void)
 	/* override driver program */
 	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_driver_kfunc);
 	attach_bpf(ctx.skel->progs.bench_trigger_fmodret);
+}
+
+static void trigger_fmodret_multi_setup(void)
+{
+	setup_ctx();
+	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, false);
+	bpf_program__set_autoload(ctx.skel->progs.trigger_driver_kfunc, true);
+	bpf_program__set_autoload(ctx.skel->progs.bench_trigger_fmodret_multi, true);
+	load_ctx();
+	/* override driver program */
+	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_driver_kfunc);
+	attach_bpf(ctx.skel->progs.bench_trigger_fmodret_multi);
 }
 
 static void trigger_tp_setup(void)
@@ -570,11 +635,15 @@ BENCH_TRIG_KERNEL(kprobe, "kprobe");
 BENCH_TRIG_KERNEL(kretprobe, "kretprobe");
 BENCH_TRIG_KERNEL(kprobe_multi, "kprobe-multi");
 BENCH_TRIG_KERNEL(kretprobe_multi, "kretprobe-multi");
-BENCH_TRIG_KERNEL(fentry, "fentry");
 BENCH_TRIG_KERNEL(kprobe_multi_all, "kprobe-multi-all");
 BENCH_TRIG_KERNEL(kretprobe_multi_all, "kretprobe-multi-all");
+BENCH_TRIG_KERNEL(fentry, "fentry");
+BENCH_TRIG_KERNEL(fentry_multi, "fentry-multi");
+BENCH_TRIG_KERNEL(fentry_multi_all, "fentry-multi-all");
 BENCH_TRIG_KERNEL(fexit, "fexit");
+BENCH_TRIG_KERNEL(fexit_multi, "fexit-multi");
 BENCH_TRIG_KERNEL(fmodret, "fmodret");
+BENCH_TRIG_KERNEL(fmodret_multi, "fmodret-multi");
 BENCH_TRIG_KERNEL(tp, "tp");
 BENCH_TRIG_KERNEL(rawtp, "rawtp");
 
