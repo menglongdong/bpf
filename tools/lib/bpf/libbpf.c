@@ -13155,7 +13155,6 @@ struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *
 	};
 	int prog_fd, pfd, cnt, err = 0, i;
 	struct bpf_link *link = NULL;
-	char errmsg[STRERR_BUFSIZE];
 	const char **syms;
 
 	if (!OPTS_VALID(opts, bpf_trace_multi_opts))
@@ -13234,8 +13233,8 @@ struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *
 	pfd = bpf_link_create(prog_fd, 0, bpf_program__expected_attach_type(prog), &link_opts);
 	if (pfd < 0) {
 		err = -errno;
-		pr_warn("prog '%s': failed to attach: %s\n",
-			prog->name, libbpf_strerror_r(pfd, errmsg, sizeof(errmsg)));
+		pr_warn("prog '%s': failed to attach: %s\n", prog->name,
+			elf_errmsg(-1));
 		goto err_free;
 	}
 	link->fd = pfd;

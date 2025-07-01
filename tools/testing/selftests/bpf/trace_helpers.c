@@ -543,6 +543,7 @@ static bool is_invalid_entry(char *buf, bool kernel)
 static const char * const trace_blacklist[] = {
 	"migrate_disable",
 	"migrate_enable",
+	"___migrate_enable",
 	"rcu_read_unlock_strict",
 	"preempt_count_add",
 	"preempt_count_sub",

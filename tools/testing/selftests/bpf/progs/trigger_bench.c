@@ -125,6 +125,19 @@ int bench_trigger_fentry(void *ctx)
 	return 0;
 }
 
+SEC("?fentry.multi/bpf_get_numa_node_id")
+int bench_trigger_fentry_multi(void *ctx)
+{
+	inc_counter();
+	return 0;
+}
+
+SEC("?fentry.multi/bpf_get_numa_node_id")
+int bench_trigger_fentry_multi_empty(void *ctx)
+{
+	return 0;
+}
+
 SEC("?fexit/bpf_get_numa_node_id")
 int bench_trigger_fexit(void *ctx)
 {
@@ -132,8 +145,29 @@ int bench_trigger_fexit(void *ctx)
 	return 0;
 }
 
+SEC("?fexit.multi/bpf_get_numa_node_id")
+int bench_trigger_fexit_multi(void *ctx)
+{
+	inc_counter();
+
+	return 0;
+}
+
+SEC("?fexit.multi/bpf_get_numa_node_id")
+int bench_trigger_fexit_multi_empty(void *ctx)
+{
+	return 0;
+}
+
 SEC("?fmod_ret/bpf_modify_return_test_tp")
 int bench_trigger_fmodret(void *ctx)
+{
+	inc_counter();
+	return -22;
+}
+
+SEC("?fmod_ret.multi/bpf_modify_return_test_tp")
+int bench_trigger_fmodret_multi(void *ctx)
 {
 	inc_counter();
 	return -22;

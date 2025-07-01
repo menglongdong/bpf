@@ -166,7 +166,7 @@ cleanup:
 	tracing_multi_mix__destroy(skel);
 }
 
-static void test_attach_bench(void)
+void serial_test_tracing_multi_bench(void)
 {
 	LIBBPF_OPTS(bpf_trace_multi_opts, opts);
 	struct fentry_multi_empty *skel;
@@ -213,11 +213,6 @@ static void test_attach_bench(void)
 cleanup:
 	fentry_multi_empty__destroy(skel);
 	free(btf_ids);
-}
-
-void serial_test_tracing_multi_attach_bench(void)
-{
-	test_attach_bench();
 }
 
 void test_tracing_multi_test(void)
