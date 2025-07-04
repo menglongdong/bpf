@@ -508,6 +508,10 @@ context_unsafe(								\
 	rcu_check_sparse(p, space); \
 	((typeof(*p) __force __kernel *)(local)); \
 })
+/* 这里的local是生成的唯一的rcu名字，这里当做了变量名。这里其实的编译阶段的优化，确保
+ * 在读取RCU数据的时候，一定要先从内存读取对应的指针，再读取指针对应的数据。一个是防止
+ * 不读取内存而使用寄存器的值，另一个是防止指令重排序。
+ */
 #define __rcu_dereference_check(p, local, c, space) \
 ({ \
 	/* Dependency order vs. p above. */ \
@@ -845,6 +849,9 @@ context_unsafe(							      \
 static __always_inline void rcu_read_lock(void)
 	__acquires_shared(RCU)
 {
+	/* 针对抢占内核，这里会禁止抢占，这会导致当前任务既不能被抢占，也不能被
+	 * migrate，保证加锁的有效性。
+	 */
 	__rcu_read_lock();
 	__acquire_shared(RCU);
 	rcu_lock_acquire(&rcu_lock_map);

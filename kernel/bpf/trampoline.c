@@ -560,6 +560,16 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 					     BPF_MOD_JUMP, NULL,
 					     im->ip_epilogue);
 		WARN_ON(err);
+		/* 如果支持TASKS_RCU的话，先走一个rcu_tasks，再走percpu_ref kill
+		 * -> __bpf_tramp_image_release -> call_rcu_tasks ->
+		 * __bpf_tramp_image_put_rcu -> __bpf_tramp_image_put_deferred
+		 * 首先通过rcu_tasks确保percpu_ref之前的指令走完了，然后通过percpu_ref
+		 * 来进行释放。再走一个rcu_tasks确保perfcpu_ref之后的指令走完了。
+		 *
+		 * 如果不支持的话，就直接percpu_ref kill，然后
+		 * -> __bpf_tramp_image_release -> call_rcu_tasks ->
+		 * __bpf_tramp_image_put_rcu -> __bpf_tramp_image_put_deferred
+		 */
 		if (IS_ENABLED(CONFIG_TASKS_RCU))
 			call_rcu_tasks(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 		else
@@ -572,6 +582,13 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 * Use call_rcu_tasks_trace() to wait for sleepable progs to finish.
 	 * Then use call_rcu_tasks() to wait for the rest of trampoline asm
 	 * and normal progs.
+	 */
+	/* 释放的路径为：
+	 * call_rcu_tasks_trace -> __bpf_tramp_image_put_rcu_tasks ->
+	 * call_rcu_tasks -> __bpf_tramp_image_put_rcu ->
+	 * __bpf_tramp_image_put_deferred
+	 * 首先通过call_rcu_tasks_trace确保sleepable的BPF程序走完了，再通过
+	 * call_rcu_tasks确保普通的BPF程序以及trampoline本身也走完了。
 	 */
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }

@@ -173,6 +173,17 @@ static inline void list_add_tail_rcu(struct list_head *new,
  * or call_rcu() must be used to defer freeing until an RCU
  * grace period has elapsed.
  */
+/* list链表的删除逻辑。由于struct list_head本身不存在时序问题，即没有什么Copy & Assign
+ * 的动作，因此这里不需要使用内存屏障。这里和普通的链表操作基本上是一样的，都是先把下一个
+ * node的指针指向上一个，再用WRITE_ONCE将上一个node的指针指向下一个。
+ *
+ * 在使用list_for_each_entry_rcu()进行遍历的时候，它每次都会使用READ_ONCE()来读取
+ * next指针，通过这种方式来保证的链表操作的一致性。因为prev是没有被访问的，因此不需要
+ * 使用WRITE_ONCE来进行修改。
+ *
+ * 其实归根到底，rcu list保护的是链表本身，而不是链表中的数据。它仅仅保护了链表的遍历
+ * 动作，因此不需要复杂的内存屏障。
+ */
 static inline void list_del_rcu(struct list_head *entry)
 {
 	__list_del_entry(entry);

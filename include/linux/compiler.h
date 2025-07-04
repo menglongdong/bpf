@@ -163,7 +163,7 @@ void ftrace_likely_update(struct ftrace_likely_data *f, int val,
 	__asm__ ("" : "=r" (var) : "0" (var))
 #endif
 
-/* Format: __UNIQUE_ID_<name>_<__COUNTER__> */
+/* 根据前缀和 __COUNTER__ 生成唯一标识：__UNIQUE_ID_<name>_<__COUNTER__>。 */
 #define __UNIQUE_ID(name)					\
 	__PASTE(__UNIQUE_ID_,					\
 	__PASTE(name,						\

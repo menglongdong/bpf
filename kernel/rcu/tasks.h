@@ -1185,6 +1185,10 @@ static void tasks_rcu_exit_srcu_stall(struct timer_list *unused)
  * See the description of call_rcu() for more detailed information on
  * memory ordering guarantees.
  */
+/* 这种RCU是不需要读端主动调用类似rcu_read_lock()的东西的。类似的，它会在宽限期结束后
+ * 被调用。而这里的宽限期，指的是进程主动调度走，包括返回到用户态、进入idle状态、主动
+ * 上下文切换（睡眠）。
+ */
 void call_rcu_tasks(struct rcu_head *rhp, rcu_callback_t func)
 {
 	call_rcu_tasks_generic(rhp, func, &rcu_tasks);
