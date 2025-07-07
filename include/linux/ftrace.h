@@ -446,6 +446,7 @@ static inline void ftrace_free_mem(struct module *mod, void *start, void *end) {
  * ftrace_ops must perform a schedule_on_each_cpu() before freeing it.
  */
 struct ftrace_ops {
+	/* ftrace的回调函数，即会在trampoline里面被调用的函数 */
 	ftrace_func_t			func;
 	struct ftrace_ops __rcu		*next;
 	unsigned long			flags;

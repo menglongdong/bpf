@@ -1797,6 +1797,14 @@ static bool __ftrace_hash_rec_update(struct ftrace_ops *ops,
 
 	/* 使用当前的ops来更新rec。这里是通过遍历所有的rec，并判断其是否在ops的哈希表
 	 * 中来实现的。
+	 *
+	 * 这里做的事情包括，对于新增的record：
+	 * - 如果当前的ops是direct call，那么就给record加上FTRACE_FL_DIRECT的标志
+	 * - 如果当前的record上面的ops只有一个，且这个ops存在trampoline，那就就给
+	 *   record加上FTRACE_FL_TRAMP的标志。这个标志会使得被HOOK的函数直接调用
+	 *   trampoline，而不是链表trampoline。否则，删除这个标志。
+	 *
+	 * 对于删除的record，不再赘述，逻辑和上面是反着的，即清除一些标志。
 	 */
 
 	/* Only update if the ops has been registered */
@@ -2046,7 +2054,7 @@ static int __ftrace_hash_update_ipmodify(struct ftrace_ops *ops,
 	is_ipmodify = ops->flags & FTRACE_OPS_FL_IPMODIFY;
 	is_direct = ops->flags & FTRACE_OPS_FL_DIRECT;
 
-	/* neither IPMODIFY nor DIRECT, skip */
+	/* 这个函数只针对ipmodify和direct call的场景，如果都没有，就直接返回 */
 	if (!is_ipmodify && !is_direct)
 		return 0;
 
@@ -2061,7 +2069,16 @@ static int __ftrace_hash_update_ipmodify(struct ftrace_ops *ops,
 	if (!new_hash || !old_hash)
 		return -EINVAL;
 
-	/* Update rec->flags */
+	/* 遍历所有的record，找到针对当前ops产生变动的record（新增的或者要移除的）。
+	 * 对于新增的，如果这个record是共享ipmodify的，说明这个record上还有别的
+	 * ops且那个ops会修改ipmodify。如果我们也有ipmodify，那么就失败，因为同一个
+	 * 函数上不能有两个ops都进行ip修改，会产生冲突。可以理解为，一个函数上不能有
+	 * 两个热补丁。如果当前的ops是direct call，那么就需要进行ipmodify和direct
+	 * call的适配，即调用回调函数。
+	 *
+	 * 如果是删除record，且我们的ops是一个ipmodify的ops，那么就移除record上的
+	 * ipmodify标志。
+	 */
 	do_for_each_ftrace_rec(pg, rec) {
 
 		if (rec->flags & FTRACE_FL_DISABLED)
@@ -2787,11 +2804,23 @@ __ftrace_replace_code(struct dyn_ftrace *rec, bool enable)
 	unsigned long ftrace_addr;
 	int ret;
 
+	/* 获取当前的record将要使用的处理函数，这里指的是直接将nop替换为call xxx的函数，
+	 * 可能是ftrace的trampoline，也可能是ftrace托管的BPF的trampoline（direct call）。
+	 */
 	ftrace_addr = ftrace_get_addr_new(rec);
 
-	/* This needs to be done before we call ftrace_update_record */
+	/* 获取当前的record当前所使用的处理函数， */
 	ftrace_old_addr = ftrace_get_addr_curr(rec);
 
+	/* 通过检查record当前已经应用的flags（有EN后缀）和将要设置的flag，来判断需要对
+	 * 这个record进行哪种操作，包括：
+	 *
+	 * FTRACE_UPDATE_MAKE_CALL：原来没有进行过HOOK，现在要进行HOOK
+	 * FTRACE_UPDATE_MAKE_NOP：原来进行了HOOK，现在要取消HOOK
+	 * FTRACE_UPDATE_MODIFY_CALL：原来进行了HOOK，现在要修改处理函数
+	 *
+	 * 具体的指令修改比较简单，就是进行指令替换，这里不再赘述。
+	 */
 	ret = ftrace_update_record(rec, enable);
 
 	ftrace_bug_type = FTRACE_BUG_UNKNOWN;
@@ -2980,6 +3009,9 @@ void ftrace_modify_all_code(int command)
 	 * to make sure the ops are having the right functions
 	 * traced.
 	 */
+	/* 这里用于修改全局（默认）ftrace_caller & ftrace_regs_caller中的callback
+	 * 函数，将其修改为链表ops。
+	 */
 	if (update) {
 		err = update_ftrace_func(ftrace_ops_list_func);
 		if (FTRACE_WARN_ON(err))
@@ -2992,6 +3024,9 @@ void ftrace_modify_all_code(int command)
 	else if (command & FTRACE_DISABLE_CALLS)
 		ftrace_replace_code(mod_flags);
 
+	/* 这是一个更新操作，但是ftrace_trace_function中存储的不是链表ops（可能是
+	 * ftrace_stub），那么就用ftrace_trace_function来进行更新。
+	 */
 	if (update && ftrace_trace_function != ftrace_ops_list_func) {
 		function_trace_op = set_function_trace_op;
 		smp_wmb();
@@ -3152,6 +3187,10 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 	if (unlikely(ftrace_disabled))
 		return -ENODEV;
 
+	/* 将当前的ops加入到全局链表ftrace_ops_list中；为当前的ops生成对应的ftrace的
+	 * trampoline；根据目前所有的ops的情况，来更新变量ftrace_trace_function，
+	 * 这个变量指向了全局（默认）的callback函数。这个变量后面会被使用。
+	 */
 	ret = __register_ftrace_function(ops);
 	if (ret)
 		return ret;
@@ -3168,6 +3207,9 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 	 */
 	ops->flags |= FTRACE_OPS_FL_ENABLED | FTRACE_OPS_FL_ADDING;
 
+	/* 检查当前的ops在ipmodify和direct call方面和每个record是否兼容，并更新
+	 * 对应的record上的IPMODIFY标志。
+	 */
 	ret = ftrace_hash_ipmodify_enable(ops);
 	if (ret < 0) {
 		/* Rollback registration process */
@@ -3180,7 +3222,8 @@ int ftrace_startup(struct ftrace_ops *ops, int command)
 	}
 
 	/* 利用当前的ops来更新对应的目标函数的record。如果ops的filter为空，那么
-	 * 针对的目标就是所有的内核函数。
+	 * 针对的目标就是所有的内核函数。这一步很重要，因为最后对内核函数进行HOOK的时候，
+	 * 是直接遍历系统中所有的record来进行的，那个时候已经和当前的这个ops没关系了。
 	 */
 	if (ftrace_hash_rec_enable(ops))
 		command |= FTRACE_UPDATE_CALLS;
@@ -5979,6 +6022,14 @@ ftrace_set_hash(struct ftrace_ops *ops, unsigned char *buf, int len,
 	struct ftrace_hash *hash;
 	int ret;
 
+	/* 这个函数的几个参数的含义分别为：
+	 *   remove: 将ips从ops的filter hash中移除
+	 *   reset: 将ops的filter hash重置为ips
+	 *   enable: 要操作的是filter hash还是notrace hash
+	 *
+	 * remove和reset都是0，enable为1，代表将ips加入到ops的filter hash
+	 */
+
 	if (unlikely(ftrace_disabled))
 		return -ENODEV;
 
@@ -5989,6 +6040,7 @@ ftrace_set_hash(struct ftrace_ops *ops, unsigned char *buf, int len,
 	else
 		orig_hash = &ops->func_hash->notrace_hash;
 
+	/* 如果是reset，就分配一个新的哈希表；不是的话，就从原来的哈希表上拷贝一份。 */
 	if (reset)
 		hash = alloc_ftrace_hash(FTRACE_HASH_DEFAULT_BITS);
 	else
@@ -5999,6 +6051,7 @@ ftrace_set_hash(struct ftrace_ops *ops, unsigned char *buf, int len,
 		goto out_regex_unlock;
 	}
 
+	/* 这里是通过字符串的方式来指定目标函数，字符串可以使用通配符等。 */
 	if (buf && !match_records(hash, buf, len, mod)) {
 		/* If this was for a module and nothing was enabled, flag it */
 		if (mod)
@@ -6011,6 +6064,7 @@ ftrace_set_hash(struct ftrace_ops *ops, unsigned char *buf, int len,
 		ret = -EINVAL;
 		goto out_regex_unlock;
 	}
+	/* 这里是通过函数地址数组的方式来指定要操作的函数列表。 */
 	if (ips) {
 		ret = ftrace_match_addr(hash, ips, cnt, remove);
 		if (ret < 0)
@@ -9151,9 +9205,13 @@ static int prepare_direct_functions_for_ipmodify(struct ftrace_ops *ops)
 
 	lockdep_assert_held_once(&direct_mutex);
 
-	/* 针对开启了ip_modify选项的ops做额外的检查，包括确保当前的ops里面的函数
-	 * 没有别的也开启了ip_modify的ops。如果存在这样的ops，那么调用这个ops的
-	 * 钩子函数来将这个事件传递过去，让它知道。
+	/* 这里是针对像热补丁这种需要对callee rip进行修改的场景，避免它和direct call
+	 * 产生冲突。设想一下，热补丁修改了栈上的callee rip想要调用新的函数，而
+	 * BPF的trampoline（direct call）采用origin call的方式调用了原来老的函数，
+	 * 这里就是为了避免这种冲突。
+	 *
+	 * 当这种情况发生后，它会调用bpf_tramp_ftrace_ops_func来进行这种情况的适配，
+	 * 具体的适配逻辑这里不再赘述。
 	 */
 	if (!(ops->flags & FTRACE_OPS_FL_IPMODIFY))
 		return 0;

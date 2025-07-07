@@ -305,7 +305,10 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	/* 把pt_regs中的rip存到了栈底的rip的位置。这里，MCOUNT_REG_SIZE+8的偏移
 	 * 就是它的位置。
 	 *
-	 * 这里也是function graph实现的地方，通过将这里的
+	 * 这里也是热补丁实现的地方，它会将pt_regs->rip放到callee rip的位置，这样
+	 * 在return的时候，就会直接跳转到新的函数上，而不是原来的目标函数上。如果
+	 * callback函数没有修改pt_regs->rip，那么它的值应该本来就是callee rip，
+	 * 这里就相当于啥也没做。
 	 */
 	movq %rax, MCOUNT_REG_SIZE+8(%rsp)
 
