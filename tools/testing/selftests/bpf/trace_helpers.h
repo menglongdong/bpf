@@ -26,8 +26,9 @@ long ksym_get_addr_local(struct ksyms *ksyms, const char *name);
 void free_kallsyms_local(struct ksyms *ksyms);
 
 struct ksyms *load_kallsyms_custom_local(ksym_cmp_t cmp_cb);
-struct ksym *search_kallsyms_custom_local(struct ksyms *ksyms, const void *p1,
-					  ksym_search_cmp_t cmp_cb);
+struct ksym *search_kallsyms_custom_local(struct ksyms *ksyms, const void *p,
+					  ksym_search_cmp_t cmp_cb,
+					  bool *unique);
 
 /* open kallsyms and find addresses on the fly, faster than load + search. */
 int kallsyms_find(const char *sym, unsigned long long *addr);

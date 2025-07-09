@@ -163,22 +163,31 @@ struct ksym *ksym_search_local(struct ksyms *ksyms, long key)
 }
 
 struct ksym *search_kallsyms_custom_local(struct ksyms *ksyms, const void *p,
-					  ksym_search_cmp_t cmp_cb)
+					  ksym_search_cmp_t cmp_cb,
+					  bool *unique)
 {
 	int start = 0, mid, end = ksyms->sym_cnt;
 	struct ksym *ks;
 	int result;
 
+	*unique = true;
 	while (start < end) {
 		mid = start + (end - start) / 2;
 		ks = &ksyms->syms[mid];
 		result = cmp_cb(p, ks);
-		if (result < 0)
+		if (result < 0) {
 			end = mid;
-		else if (result > 0)
+			continue;
+		} else if (result > 0) {
 			start = mid + 1;
-		else
-			return ks;
+			continue;
+		}
+
+		if ((mid > 0 && cmp_cb(p, &ksyms->syms[mid - 1]) == 0) ||
+		    (mid < ksyms->sym_cnt - 1 && cmp_cb(p, &ksyms->syms[mid + 1]) == 0))
+			*unique = false;
+
+		return ks;
 	}
 
 	return NULL;
@@ -522,16 +531,6 @@ void read_trace_pipe(void)
 	read_trace_pipe_iter(trace_pipe_cb, NULL, 0);
 }
 
-static size_t symbol_hash(long key, void *ctx __maybe_unused)
-{
-	return str_hash((const char *) key);
-}
-
-static bool symbol_equal(long key1, long key2, void *ctx __maybe_unused)
-{
-	return strcmp((const char *) key1, (const char *) key2) == 0;
-}
-
 static bool is_invalid_entry(char *buf, bool kernel)
 {
 	if (kernel && strchr(buf, '['))
@@ -614,7 +613,6 @@ int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel)
 {
 	size_t cap = 0, cnt = 0;
 	char *name = NULL, *ksym_name, **syms = NULL;
-	struct hashmap *map;
 	struct ksyms *ksyms;
 	struct ksym *ks;
 	char buf[256];
@@ -640,13 +638,9 @@ int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel)
 	if (!f)
 		return -EINVAL;
 
-	map = hashmap__new(symbol_hash, symbol_equal, NULL);
-	if (IS_ERR(map)) {
-		err = libbpf_get_error(map);
-		goto error;
-	}
-
 	while (fgets(buf, sizeof(buf), f)) {
+		bool unique;
+
 		if (is_invalid_entry(buf, kernel))
 			continue;
 
@@ -656,21 +650,16 @@ int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel)
 		if (skip_entry(name))
 			continue;
 
-		ks = search_kallsyms_custom_local(ksyms, name, search_kallsyms_compare);
+		ks = search_kallsyms_custom_local(ksyms, name, search_kallsyms_compare,
+						  &unique);
 		if (!ks) {
 			err = -EINVAL;
 			goto error;
 		}
+		if (!unique)
+			continue;
 
 		ksym_name = ks->name;
-		err = hashmap__add(map, ksym_name, 0);
-		if (err == -EEXIST) {
-			err = 0;
-			continue;
-		}
-		if (err)
-			goto error;
-
 		err = libbpf_ensure_mem((void **) &syms, &cap,
 					sizeof(*syms), cnt + 1);
 		if (err)
@@ -685,7 +674,6 @@ int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel)
 error:
 	free(name);
 	fclose(f);
-	hashmap__free(map);
 	if (err)
 		free(syms);
 	return err;
