@@ -2020,6 +2020,7 @@ bootp_relay - BOOLEAN
 
 	Not Implemented Yet.
 
+.. 接受SRR选项，即IP报文可以在选项中指定路由地址，而不是通过本机决定。
 accept_source_route - BOOLEAN
 	Accept packets with SRR option.
 	conf/all/accept_source_route must also be set to TRUE to accept packets
