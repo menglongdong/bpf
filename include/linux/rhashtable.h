@@ -758,7 +758,7 @@ static __always_inline struct rhlist_head *rhltable_lookup_likely(
  * function returns the existing element already in hashes if there is a clash,
  * otherwise it returns an error via ERR_PTR().
  */
-/* 插入哈希对象；若 key 冲突则返回已存在对象。 */
+/* 插入哈希对象；若 key 冲突则返回已存在对象，否则返回 NULL。 */
 static __always_inline void *__rhashtable_insert_fast(
 	struct rhashtable *ht, const void *key, struct rhash_head *obj,
 	const struct rhashtable_params params, bool rhlist)
@@ -810,6 +810,10 @@ slow_path:
 
 		data = rht_obj(ht, head);
 
+		/* 如果已经存在了对应的key,且不是重复哈希表，那么就直接返回这个
+		 * 存在的对象。如果是重复哈希表，那么就将新数据插入到哈希表中，
+		 * 然后返回成功。
+		 */
 		if (!rhlist)
 			goto out_unlock;
 
