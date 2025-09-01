@@ -1402,6 +1402,7 @@ static struct sk_buff *vrf_ip_rcv(struct net_device *vrf_dev,
 
 	dev_dstats_rx_add(vrf_dev, skb->len);
 
+	/* 处理VRF网口上的抓包函数，这里可以看出来，他是在L3的地方进行抓包的。 */
 	if (!list_empty(&vrf_dev->ptype_all)) {
 		int err;
 
@@ -1414,6 +1415,9 @@ static struct sk_buff *vrf_ip_rcv(struct net_device *vrf_dev,
 		}
 	}
 
+	/* 再次进行PREROUTING的处理，之前处理的是物理网卡的情况，这里修改了dev，
+	 * 要再处理一次。
+	 */
 	skb = vrf_rcv_nfhook(NFPROTO_IPV4, NF_INET_PRE_ROUTING, skb, vrf_dev);
 out:
 	return skb;
@@ -1424,6 +1428,7 @@ static struct sk_buff *vrf_l3_rcv(struct net_device *vrf_dev,
 				  struct sk_buff *skb,
 				  u16 proto)
 {
+	/* 在ip_rcv_finish中被调用，主要作用为修改报文的dev为vrf网口。 */
 	switch (proto) {
 	case AF_INET:
 		return vrf_ip_rcv(vrf_dev, skb);
