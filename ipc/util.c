@@ -406,6 +406,13 @@ static int ipcget_public(struct ipc_namespace *ns, struct ipc_ids *ids,
 	 * a new entry + read locks are not "upgradable"
 	 */
 	down_write(&ids->rwsem);
+	/* 进行shm实例的获取或者创建。在这个函数里，会根据key来从ids里面进行ipc实例的
+	 * 查找，在同一个ns里面，每个ipc实例的id都是唯一的。也就是说，不同的进程根据
+	 * key获取到的ipc实例是同一个，id都是一样的。
+	 *
+	 * 如果找不到对应的实例，那么就调用ops->getnew()来创建一个新的实例。如果找到了，
+	 * 会拿取rcu和ipcp上的spinlock锁。
+	 */
 	ipcp = ipc_findkey(ids, params->key);
 	if (ipcp == NULL) {
 		/* key not used */
@@ -416,6 +423,9 @@ static int ipcget_public(struct ipc_namespace *ns, struct ipc_ids *ids,
 	} else {
 		/* ipc object has been locked by ipc_findkey() */
 
+		/* IPC_EXCL+IPC_CREAT代表的是只能新建，如果已经存在了这个key对应
+		 * 的ipc实例，那么就返回EEXIST错误。
+		 */
 		if (flg & IPC_CREAT && flg & IPC_EXCL)
 			err = -EEXIST;
 		else {
