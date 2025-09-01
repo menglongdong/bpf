@@ -1490,6 +1490,7 @@ static void fib_disable_ip(struct net_device *dev, unsigned long event,
 	arp_ifdown(dev);
 }
 
+/* 这个是地址事件，当网口上被添加或者删除IP地址的时候，这个事件会被触发。 */
 static int fib_inetaddr_event(struct notifier_block *this, unsigned long event, void *ptr)
 {
 	struct in_ifaddr *ifa = ptr;
@@ -1521,6 +1522,9 @@ static int fib_inetaddr_event(struct notifier_block *this, unsigned long event, 
 	return NOTIFY_DONE;
 }
 
+/* 网卡路由的处理函数，即网卡状态发生变化后，调用这个函数来实现路由的更新。比如，网卡
+ * down了要把路由删除，网卡up了要把路由添加回来。
+ */
 static int fib_netdev_event(struct notifier_block *this, unsigned long event, void *ptr)
 {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
@@ -1543,6 +1547,9 @@ static int fib_netdev_event(struct notifier_block *this, unsigned long event, vo
 
 	switch (event) {
 	case NETDEV_UP:
+		/* 遍历当前网口上所有的地址，然后调用fib_add_ifaddr来进行路由的
+		 * 更新。
+		 */
 		in_dev_for_each_ifa_rtnl(ifa, in_dev) {
 			fib_add_ifaddr(ifa);
 		}

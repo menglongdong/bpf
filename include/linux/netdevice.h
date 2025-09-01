@@ -2122,6 +2122,7 @@ struct net_device {
 
 	/* TX read-mostly hotpath */
 	__cacheline_group_begin(net_device_read_tx);
+	/* 这里的priv_flags_fast.priv_flags和priv_flags是一个东西。 */
 	struct_group(priv_flags_fast,
 		unsigned long		priv_flags:32;
 		unsigned long		lltx:1;
@@ -3153,12 +3154,16 @@ struct netdev_lag_lower_state_info {
  * adding new types.
  */
 enum netdev_cmd {
+	/* 如果是inet的事件，这里的down和up分别代表添加和删除IP地址 */
 	NETDEV_UP	= 1,	/* For now you can't veto a device up/down */
 	NETDEV_DOWN,
 	NETDEV_REBOOT,		/* Tell a protocol stack a network interface
 				   detected a hardware crash and restarted
 				   - we can use this eg to kick tcp sessions
 				   once done */
+	/* 一个处于UP状态的网口发生了状态变化，可以参考netif_state_change函数。
+	 * 比如修改了MAC地址/网卡特性，设置了master网口等，都会触发这个事件。
+	 */
 	NETDEV_CHANGE,		/* Notify device state change */
 	NETDEV_REGISTER,
 	NETDEV_UNREGISTER,
@@ -3177,6 +3182,9 @@ enum netdev_cmd {
 	NETDEV_RELEASE,
 	NETDEV_NOTIFY_PEERS,
 	NETDEV_JOIN,
+	/* 这个指的是在一个网口上面创建出来多个子网口的情况，比如给某个物理口添加
+	 * vlan口，这个时候会触发这个事件。因为不是master/slave的模式。
+	 */
 	NETDEV_CHANGEUPPER,
 	NETDEV_RESEND_IGMP,
 	NETDEV_PRECHANGEMTU,	/* notify before mtu change happened */

@@ -91,6 +91,9 @@ int __fib_lookup(struct net *net, struct flowi4 *flp,
 	int err;
 
 	/* update flow if oif or iif point to device enslaved to l3mdev */
+	/* 这里根据进来和出去的网口，来查找其是否属于某个VRF，如果是的话，及更新
+	 * 这个VRF的index到flp上面，用作后面的路由查找。
+	 */
 	l3mdev_update_flow(net, flowi4_to_flowi(flp));
 
 	err = fib_rules_lookup(net->ipv4.rules_ops, flowi4_to_flowi(flp), 0, &arg);

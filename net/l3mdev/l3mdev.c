@@ -9,6 +9,8 @@
 #include <net/fib_rules.h>
 #include <net/l3mdev.h>
 
+/* 三层master设备？好像VRF是基于这个来实现的，即VRF本身也是属于一种L3MDEV。 */
+
 static DEFINE_SPINLOCK(l3mdev_lock);
 
 struct l3mdev_handler {

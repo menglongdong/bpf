@@ -453,6 +453,14 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	/* if ingress device is enslaved to an L3 master device pass the
 	 * skb to its handler for processing
 	 */
+	/* 在路由之前，先进行L3MDEV(VRF)逻辑的处理。由于VRF并没有注册handler，
+	 * 所以这里的物理网卡走的还是原来的逻辑，直到这里的路由处理阶段才会牵扯
+	 * 进来。
+	 *
+	 * 当前的网口如果是VRF的一个slave，那么就会调用这个slave对应的master
+	 * 网口的l3mdev_l3_rcv钩子函数，对于VRF来说，就是vrf_l3_rcv。这里主要
+	 * 是修改报文的dev为vrf网口，并做一些额外的处理。
+	 */
 	skb = l3mdev_ip_rcv(skb);
 	if (!skb)
 		return NET_RX_SUCCESS;

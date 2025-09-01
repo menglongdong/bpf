@@ -1474,6 +1474,18 @@ int macvlan_common_newlink(struct net_device *dev,
 	if (!tb[IFLA_LINK])
 		return -EINVAL;
 
+	/* 创建macvlan网口的时候，必须要指定一个lower设备。如果这个设备上面还没有
+	 * macvlan子网口，那么就调用macvlan_port_create给他上面注册macvlan的
+	 * handler。这里可以看出来，macvlan子网口和lower之间并不是master和
+	 * slave的关系。
+	 *
+	 * 一般来说，如果虚拟口和物理口是一对多的关系，那才是master和slave的关系，
+	 * 就像bridge/vrf等，使用的是ip link set master的方式。这里更像是
+	 * lower和upper的关系。
+	 *
+	 * 无论是upper还是master，都是有可能注册handler的，而handler是唯一的。
+	 * 这就要求，他们是不能冲突的。
+	 */
 	lowerdev = __dev_get_by_index(link_net, nla_get_u32(tb[IFLA_LINK]));
 	if (lowerdev == NULL)
 		return -ENODEV;

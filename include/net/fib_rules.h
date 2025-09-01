@@ -95,6 +95,7 @@ struct fib_rules_ops {
 	void			(*flush_cache)(struct fib_rules_ops *ops);
 
 	int			nlgroup;
+	/* 看起来所有的策略路由都会按照优先级的顺序放到这个路由表里的。 */
 	struct list_head	rules_list;
 	struct module		*owner;
 	struct net		*fro_net;

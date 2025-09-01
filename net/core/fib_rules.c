@@ -322,6 +322,10 @@ int fib_rules_lookup(struct fib_rules_ops *ops, struct flowi *fl,
 
 	rcu_read_lock();
 
+	/* 这里的rule是用于决定使用哪个路由表的。对于VRF网卡，会自动创建一个对应
+	 * 的rule（唯一的）。如果这个rule存在，就会调用l3mdev_fib_rule_match ->
+	 * l3mdev_fib_table来查找对应的路由表，并存放到结果中。
+	 */
 	list_for_each_entry_rcu(rule, &ops->rules_list, list) {
 jumped:
 		if (!fib_rule_match(rule, ops, fl, flags, arg))

@@ -3428,7 +3428,10 @@ adjudge_to_death:
 		}
 	}
 	if (sk->sk_state != TCP_CLOSE) {
-		/* 进行资源状态的检查，包括孤儿套接口的数量等。 */
+		/* 进行资源状态的检查，包括孤儿套接口的数量等。如果这个时候，资源
+		 * 紧张（孤立套接口数量和tcp_mem），那么就直接释放套接口，不进行
+		 * 四次挥手。
+		 */
 		if (tcp_check_oom(sk, 0)) {
 			tcp_set_state(sk, TCP_CLOSE);
 			tcp_send_active_reset(sk, GFP_ATOMIC,
@@ -5474,6 +5477,10 @@ void __init tcp_init(void)
 	sysctl_tcp_max_orphans = cnt / 2;
 
 	tcp_init_mem();
+	/* 这里是计算tcp_rmem和tcp_wmem的默认值大小。看样子这里是取的 tcp_mem[2] / 128，
+	 * 在这个基础上又设置了对应的上限。发包上限是4M，收包上限是6M。最新的代码
+	 * 把收包的上限改成了32M，离谱~
+	 */
 	/* Set per-socket limits to no more than 1/128 the pressure threshold */
 	limit = nr_free_buffer_pages() << (PAGE_SHIFT - 7);
 	max_wshare = min(4UL*1024*1024, limit);

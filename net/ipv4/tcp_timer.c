@@ -114,6 +114,10 @@ static int tcp_out_of_resources(struct sock *sk, bool do_reset)
 	struct tcp_sock *tp = tcp_sk(sk);
 	int shift = 0;
 
+	/* 这个会在孤立的套接口发生重传的时候（包括probe重传）被调用，用于决定是否
+	 * 立马对这个套接口进行释放。
+	 */
+
 	/* If peer does not open window for long time, or did not transmit
 	 * anything for long time, penalize it. */
 	if ((s32)(tcp_jiffies32 - tp->lsndtime) > 2*tcp_rto_max(sk) || !do_reset)
