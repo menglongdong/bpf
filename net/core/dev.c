@@ -4011,6 +4011,7 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 {
 	netdev_features_t features;
 
+	/* 这里是验证devmem的场景的，这种情况下skb里面的信息是不可读的。 */
 	skb = validate_xmit_unreadable_skb(skb, dev);
 	if (unlikely(!skb))
 		goto out_null;

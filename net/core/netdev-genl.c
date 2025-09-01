@@ -944,6 +944,8 @@ int netdev_nl_bind_rx_doit(struct sk_buff *skb, struct genl_info *info)
 	int err = 0;
 	void *hdr;
 
+	/* 绑定收包时候的devmem。 */
+
 	if (GENL_REQ_ATTR_CHECK(info, NETDEV_A_DEV_IFINDEX) ||
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_DMABUF_FD) ||
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_DMABUF_QUEUES))
@@ -1083,11 +1085,13 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_unlock_sock;
 	}
 
+	/* 检查当前网卡是否可用。 */
 	if (!netif_device_present(netdev)) {
 		err = -ENODEV;
 		goto err_unlock_netdev;
 	}
 
+	/* netmem_tx是网卡驱动支持devmem的基础，这里检查其是否支持netmem。 */
 	if (!netdev->netmem_tx) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
@@ -1095,6 +1099,7 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_unlock_netdev;
 	}
 
+	/* 将 DMABUF 与网卡队列对应的 dma_dev 进行绑定。 */
 	dma_dev = netdev_queue_get_dma_dev(netdev, 0);
 	binding = net_devmem_bind_dmabuf(netdev, dma_dev, DMA_TO_DEVICE,
 					 dmabuf_fd, priv, info->extack);

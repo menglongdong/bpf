@@ -1475,6 +1475,9 @@ int main(int argc, char *argv[])
 		return run_devmem_tests();
 	}
 
+	/* 如果没有指定网口的队列信息，那就进行检查，获取总的队列数量。然后取最后一个
+	 * 队列作为我们的工作队列。
+	 */
 	if (start_queue < 0 && num_queues < 0) {
 		num_queues = rxq_num(ifindex);
 		if (num_queues < 2) {
@@ -1516,6 +1519,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	/* 分配64M的UDMABUF数据，作为报文接收数据。这个数据会被mmap到用户态空间 */
 	mem = provider->alloc(getpagesize() * NUM_PAGES);
 	if (!mem) {
 		pr_err("Failed to allocate memory buffer");
