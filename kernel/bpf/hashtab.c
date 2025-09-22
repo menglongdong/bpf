@@ -599,7 +599,10 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		goto free_htab;
 
 	err = -ENOMEM;
-	/* 分配哈希映射桶 */
+	/* 分配哈希映射桶。这里的桶的长度取决于哈希表的最大元素数量，根据
+	 * roundup_pow_of_two计算出来的。这也意味着，buckets的数量是大于最大
+	 * 元素数量的。所以hash map的性能是和rhashtable差不多的呢。
+	 */
 	htab->buckets = bpf_map_area_alloc(htab->n_buckets *
 					   sizeof(struct bucket),
 					   htab->map.numa_node);
@@ -1111,6 +1114,10 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 				 */
 				return ERR_PTR(-E2BIG);
 		inc_elem_count(htab);
+		/* 为了提升性能，这里使用了bpf自定义的cache功能。这里存在一定的
+		 * 预分配好的cache，直接使用，链表的方式管理。当cache快用完了，
+		 * 那么就触发irq work，在后台进行cache的分配。
+		 */
 		l_new = bpf_mem_cache_alloc(&htab->ma);
 		if (!l_new) {
 			l_new = ERR_PTR(-ENOMEM);
@@ -1187,6 +1194,7 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 
 	key_size = map->key_size;
 
+	/* 计算哈希值，用于定位到对应的桶。 */
 	hash = htab_map_hash(key, key_size, htab->hashrnd);
 
 	b = __select_bucket(htab, hash);

@@ -207,6 +207,7 @@ DEFINE_IDR(btf_idr);
 DEFINE_SPINLOCK(btf_idr_lock);
 
 enum btf_kfunc_hook {
+	/* 这个代表所有的BPF类型都可以使用的kfunc */
 	BTF_KFUNC_HOOK_COMMON,
 	BTF_KFUNC_HOOK_XDP,
 	BTF_KFUNC_HOOK_TC,

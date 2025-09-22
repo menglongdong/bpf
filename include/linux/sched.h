@@ -1497,6 +1497,12 @@ struct task_struct {
 
 #ifdef CONFIG_TRACING
 	/* Bitmask and counter of trace recursion: */
+	/* 这个是检查是否存在ftrace递归调用的情况，防止陷入循环。同时，这里会关闭
+	 * 抢占，这也就意味着不能进行CPU迁移的。
+	 *
+	 * 这里可以看出来，不同的上下文有不同的bit，所以在不同的上下文中是可以
+	 * 嵌套的。具体可以参考：TRACE_FTRACE_BIT
+	 */
 	unsigned long			trace_recursion;
 #endif /* CONFIG_TRACING */
 

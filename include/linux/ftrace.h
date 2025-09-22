@@ -1285,13 +1285,16 @@ void *fgraph_retrieve_parent_data(int idx, int *size_bytes, int depth);
  * Used in struct thread_info
  */
 struct ftrace_ret_stack {
-	/* 这个是caller的rip */
+	/* 这个是caller的rip，在函数返回时，通过这个字段恢复正确的返回地址，
+	 * 使程序能够正确返回到调用者。
+	 */
 	unsigned long ret;
+	/* 当前被跟踪函数的地址，在函数返回时，用于生成函数图跟踪的返回事件 */
 	unsigned long func;
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	unsigned long fp;
 #endif
-	/* 这个是 caller rip在栈里的地址 */
+	/* 这个是 caller rip在栈里的地址，通过修改栈中的返回地址来实现对函数返回的拦截 */
 	unsigned long *retp;
 };
 

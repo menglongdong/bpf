@@ -86,6 +86,7 @@ enum {
 
 static __always_inline int trace_get_context_bit(void)
 {
+	/* 获取当前的上下文级别，0=普通, 1=软中断, 2=硬中断, 3=NMI */
 	unsigned char bit = interrupt_context_level();
 
 	return TRACE_CTX_NORMAL - bit;
@@ -132,6 +133,7 @@ static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsign
 	if (trace_warn_on_no_rcu(ip))
 		return -1;
 
+	/* 检查是否已经在该上下文中被调用。这里的start就是为了判断是否是内部调用。 */
 	bit = trace_get_context_bit() + start;
 	if (unlikely(val & (1 << bit))) {
 		/*
@@ -141,6 +143,10 @@ static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsign
 		 * will think a recursion occurred, and the event will be dropped.
 		 * Let a single instance happen via the TRANSITION_BIT to
 		 * not drop those events.
+		 */
+		/*
+		 * 如果检测到递归，尝试使用TRANSITION_BIT，这允许在上下文转换
+		 * 期间发生一次递归。
 		 */
 		bit = TRACE_CTX_TRANSITION + start;
 		if (val & (1 << bit)) {

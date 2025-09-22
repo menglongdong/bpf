@@ -379,6 +379,12 @@ void *fgraph_reserve_data(int idx, int size_bytes)
 	int curr_ret_stack = current->curr_ret_stack;
 	int data_size;
 
+	/* 这里的idx是当前gops在数组中的索引，也是用来加速的。这个处理函数会被
+	 * function graph tracer调用（就是ftrace里面的那个功能），并存储一些它特定
+	 * 的需要的信息，比如调用时间。可以看出来，graph tracer这么多的功能，也都是
+	 * 依赖于shadow stack来实现的。
+	 */
+
 	if (size_bytes > FGRAPH_MAX_DATA_SIZE)
 		return NULL;
 
@@ -392,6 +398,15 @@ void *fgraph_reserve_data(int idx, int size_bytes)
 	if (unlikely(curr_ret_stack >= SHADOW_STACK_MAX_OFFSET))
 		return NULL;
 
+	/* 这里来更新每个frame上面的元数据信息，将FGRAPH_TYPE_DATA加到了type
+	 * 里，扩充data size（总的），将当前预留的数据长度填充到对应的位域中。
+	 * 这样，就完成了对当前的shadow stack栈帧的改造。
+	 *
+	 * 然而，它并没有破坏（修改）原来的栈帧，而是在原来的栈帧的基础上增加了一个
+	 * 简易的子栈帧，用于存储当前预留的数据。这也就意味着，它需要额外申请8字节
+	 * 的数据用来存储当前的元数据信息。这使得，各个ops都可以保存自己的自定义信
+	 * 息，也就意味着一个栈帧上可以有多个ops存储自定义信息。
+	 */
 	val = make_data_type_val(idx, data_size, __get_offset(val) + data_size + 1);
 
 	/* Set the last word to be reserved */
@@ -606,6 +621,10 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 	BUILD_BUG_ON(SHADOW_STACK_SIZE % sizeof(long));
 
 	/* Set val to "reserved" with the delta to the new fgraph frame */
+	/* 这个是frame的元数据信息，该字的低10位存储到下一个 ftrace_ret_stack
+	 * 结构体的偏移量，以long为单位。这里其实存储的是固定的struct ftrace_ret_stack
+	 * 的尺寸。这是不是说明，这个shadow stack也可以存储其他类型的数据？
+	 */
 	val = (FGRAPH_TYPE_RESERVED << FGRAPH_TYPE_SHIFT) | FGRAPH_FRAME_OFFSET;
 
 	/*
@@ -625,6 +644,7 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 
 	offset = READ_ONCE(current->curr_ret_stack);
 	ret_stack = RET_STACK(current, offset);
+	/* 增加一个fgraph frame的偏移，也就是struct ftrace_ret_stack的长度。 */
 	offset += FGRAPH_FRAME_OFFSET;
 
 	/* ret offset = FGRAPH_FRAME_OFFSET ; type = reserved */
@@ -644,6 +664,9 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 	 * at least a correct offset!
 	 */
 	barrier();
+	/* 这里又加了个1，作用应该是存储每个frame上面的64位（8字节）的bit map。
+	 * 这里可以看出来，每个frame的长度是(3 + 1) * 8 = 32字节。
+	 */
 	WRITE_ONCE(current->curr_ret_stack, offset + 1);
 	/*
 	 * This next barrier is to ensure that an interrupt coming in
@@ -731,6 +754,9 @@ int function_graph_enter_regs(unsigned long ret, unsigned long func,
 
 			/* 遍历所有的fgraph的ops，在满足其哈希表的情况下执行对应的ops。
 			 * 这里执行的是入口函数的ops。
+			 *
+			 * 这里的每个函数都可能在当前的基础上对栈帧进行修改（累加），
+			 * 从而来存储一些自定义的信息数据。
 			 */
 			save_curr_ret_stack = current->curr_ret_stack;
 			if (ftrace_ops_test(&gops->ops, func, NULL) &&
@@ -770,6 +796,20 @@ ftrace_pop_return_trace(struct ftrace_graph_ret *trace, unsigned long *ret,
 {
 	struct ftrace_ret_stack *ret_stack;
 
+	/*
+	 * 影子栈条目布局：
+	 * +--------------------------------------------+
+	 * | 元数据字 (bitmap/data)                      | <- 当前偏移位置
+	 * +--------------------------------------------+
+	 * | struct ftrace_ret_stack                   | <- 实际数据
+	 * |   - ret: 调用者返回地址                    |
+	 * |   - func: 被跟踪函数地址                   |
+	 * |   - fp: 帧指针（可选）                     |
+	 * |   - retp: 返回地址指针                     |
+	 * +--------------------------------------------+
+	 * | 下一个条目的偏移信息                        | <- 上一个条目
+	 * +--------------------------------------------+
+	 */
 	ret_stack = get_ret_stack(current, current->curr_ret_stack, offset);
 
 	if (unlikely(!ret_stack)) {
