@@ -1242,6 +1242,9 @@ int map_check_no_btf(struct bpf_map *map,
 	return -ENOTSUPP;
 }
 
+/* 这里用于检查map中存储特殊的类型的情况（比如spinlock）。这里的key和value的类型
+ * 都是prog中定义的类型，内嵌一些固定类型（如spinlock）。
+ */
 static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 			 const struct btf *btf, u32 btf_key_id, u32 btf_value_id)
 {
@@ -1264,6 +1267,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 	if (!value_type || value_size != map->value_size)
 		return -EINVAL;
 
+	/* 解析map中的btf信息，并将其梳理成record。 */
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD |
 				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR |
@@ -1526,6 +1530,9 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr)
 	mutex_init(&map->freeze_mutex);
 	spin_lock_init(&map->owner_lock);
 
+	/* 如果使用BPF_ANNOTATE_KV_PAIR指定了map对应的key和value的类型，那么
+	 * 这里就会对其进行类型检查。这也是像是spinlock所走的逻辑。
+	 */
 	if (attr->btf_key_type_id || attr->btf_value_type_id ||
 	    /* Even the map's value is a kernel's struct,
 	     * the bpf_prog.o must have BTF to begin with

@@ -437,6 +437,7 @@ static struct bpf_lru_node *bpf_common_lru_pop_free(struct bpf_lru *lru,
 
 	loc_l = per_cpu_ptr(clru->local_list, cpu);
 
+	/* 从LRU的free链表中取出一个node使用。同时，会将其加入到pending链表中 */
 	raw_spin_lock_irqsave(&loc_l->lock, flags);
 
 	node = __local_list_pop_free(loc_l);

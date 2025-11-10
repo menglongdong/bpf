@@ -1009,6 +1009,9 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 
 	if (htab_is_prealloc(htab)) {
 		bpf_map_dec_elem_count(&htab->map);
+		/* 释放map中的特殊字段，比如KPTR_REF，SPINLOCK等资源。
+		 * 非prealloc的情况，会在htab_elem_free函数中调用这个函数。
+		 */
 		check_and_free_fields(htab, l);
 		pcpu_freelist_push(&htab->freelist, &l->fnode);
 	} else {
@@ -1091,6 +1094,9 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 		if (old_elem) {
 			/* if we're updating the existing element,
 			 * use per-cpu extra elems to avoid freelist_pop/push
+			 */
+			/* 把老的存到当前map的percpu变量extra_elems中，避免
+			 * freelist频繁的pop和push操作。
 			 */
 			pl_new = this_cpu_ptr(htab->extra_elems);
 			l_new = *pl_new;
@@ -1200,6 +1206,9 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 	b = __select_bucket(htab, hash);
 	head = &b->head;
 
+	/* 对于存在spinlock锁的情况，在进行map数据拷贝之前，需要先获取锁（存在老的
+	 * 数据）。
+	 */
 	if (unlikely(map_flags & BPF_F_LOCK)) {
 		if (unlikely(!btf_record_has_field(map->record, BPF_SPIN_LOCK)))
 			return -EINVAL;
@@ -1211,6 +1220,10 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 			return ret;
 		if (l_old) {
 			/* grab the element lock and update value in place */
+			/* 更新map的数据，但是不拷贝特殊字段，比如spinlock和kptr。这里
+			 * 是原地拷贝，也就是所直接在原来的value上进行修改，因此
+			 * 不涉及到free old的逻辑。
+			 */
 			copy_map_value_locked(map,
 					      htab_elem_value(l_old, key_size),
 					      value, false);
@@ -1246,6 +1259,9 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 		goto err;
 	}
 
+	/* 常规的hash map更新模式：先分配一个新的，然后把老的给释放掉。对于prealloc
+	 * 的情况，这里会直接利用老的元素。
+	 */
 	l_new = alloc_htab_elem(htab, key, value, key_size, hash, false, false,
 				l_old, map_flags);
 	if (IS_ERR(l_new)) {
@@ -1283,6 +1299,7 @@ static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
 	bpf_lru_push_free(&htab->lru, &elem->lru_node);
 }
 
+/* LRU哈希表用来进行更新map的函数。 */
 static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value,
 				     u64 map_flags)
 {
@@ -1301,6 +1318,23 @@ static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 
 	key_size = map->key_size;
+
+	/* 
+	 * 整个函数调用，都需要处于rcu保护状态才行，即必须要持有rcu_read,
+	 * rcu_read_trace, rcu_read_bh中的任意一个。
+	 *
+	 * 这里会先根据key从哈希表中找到对应的bucket，然后从当前哈希表的LRU链表中
+	 * pop一个空闲的node。随后，获取这个bucket上面的spinlock锁。
+	 *
+	 * 每个LRU上面有个percpu的链表，每次pop数据的时候会先从当前CPU上面的链表
+	 * 上查找数据。这个过程中，会拿取当前CPU上的spinlock锁。
+	 *
+	 * 随后，会查找有没有旧的数据。如果有的话，会从当前的哈希表中删除，然后
+	 * 将新分配的node加入到哈希表中。最后将旧的数据push到LRU链表中。push的
+	 * 时候，也会拿取spinlock锁。
+	 *
+	 * 这里的问题在于，push的时候可能会由于拿不到锁（死锁等）而失败。怎么办呢？
+	 */
 
 	hash = htab_map_hash(key, key_size, htab->hashrnd);
 

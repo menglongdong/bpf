@@ -1458,6 +1458,28 @@ trace_page_fault_entries(struct pt_regs *regs, unsigned long error_code,
 		trace_page_fault_kernel(address, regs, error_code);
 }
 
+/* 针对BPF程序的page fault，它的调用链为：
+ * 1. 硬件触发Page Fault
+ *    ↓
+ * 2. exc_page_fault() [entry_64.S]
+ *    ↓
+ * 3. handle_page_fault() [fault.c:1464]
+ *    ↓
+ * 4. do_kern_addr_fault() [fault.c:1136]
+ *    ↓
+ * 5. bad_area_nosemaphore() [fault.c:777]
+ *    ↓
+ * 6. kernelmode_fixup_or_oops() [fault.c:719]
+ *    ↓
+ * 7. fixup_exception() [extable.c:300]
+ *    ↓
+ * 8. search_exception_tables() [查找异常表]
+ *    ↓
+ * 9. ex_handler_bpf() [bpf_jit_comp.c:1403]
+ *    ↓
+ * 10. 修复寄存器并跳转到安全地址
+ */
+
 static __always_inline void
 handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 			      unsigned long address)

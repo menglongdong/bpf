@@ -66,6 +66,17 @@ struct ctl_table_header;
 /* unused opcode to mark special call to bpf_tail_call() helper */
 #define BPF_TAIL_CALL	0xf0
 
+/* 这里面带PROBE的指令，在JIT的时候，都会被加入到异常表中，并将类型设置为EX_TYPE_BPF。
+ * 这样，在触发缺页异常时，会调用ex_handler_bpf()来处理。
+ *
+ * 在进行JIT的时候，会对地址的合法性进行基本的检查，包括其在内核地址空间中才行。
+ * 这个看起来还是会有一定的性能开销哦。
+ *
+ * 这是一条伪指令，在verifier的时候，如果读取的是BTF TYPE的内存，那么就会将这个指令
+ * 加上这个标记。后面再进行JIT的时候，就会进行特殊的处理。看起来BTF的直接内存读取
+ * 的效率并没有想象中高啊。
+ */
+
 /* unused opcode to mark special load instruction. Same as BPF_ABS */
 #define BPF_PROBE_MEM	0x20
 

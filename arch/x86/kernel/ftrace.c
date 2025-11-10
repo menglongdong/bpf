@@ -495,6 +495,9 @@ static unsigned long calc_trampoline_call_offset(bool save_regs)
 	return call_offset - start_offset;
 }
 
+/* 这个是用来更新ftrace上面的trampoline的，当ftrace上面还没有trampoline，或者
+ * ftrace上面对应的callback函数发生了变化，会调用这个函数来更新trampoline。
+ */
 void arch_ftrace_update_trampoline(struct ftrace_ops *ops)
 {
 	ftrace_func_t func;
@@ -518,6 +521,7 @@ void arch_ftrace_update_trampoline(struct ftrace_ops *ops)
 	if (!(ops->flags & FTRACE_OPS_FL_ALLOC_TRAMP))
 		return;
 
+	/* 计算出来trampoline中call指令的偏移量 */
 	offset = calc_trampoline_call_offset(ops->flags & FTRACE_OPS_FL_SAVE_REGS);
 	ip = ops->trampoline + offset;
 	func = ftrace_ops_get_func(ops);

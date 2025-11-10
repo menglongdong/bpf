@@ -1489,6 +1489,9 @@ static int emit_atomic_ld_st_index(u8 **pprog, u32 atomic_op, u32 size,
 #define FIXUP_ARENA_ACCESS	BIT(31)
 #define DATA_ARENA_OFFSET_MASK	GENMASK(31, 16)
 
+/* BPF程序可以HOOK这个函数而不会发生递归，这个是因为BPF运行之前已经开启的递归
+ * 保护，BPF中触发fault的话，不会再次陷入BPF中。
+ */
 bool ex_handler_bpf(const struct exception_table_entry *x, struct pt_regs *regs)
 {
 	u32 reg = FIELD_GET(FIXUP_REG_MASK, x->fixup);
@@ -1509,8 +1512,8 @@ bool ex_handler_bpf(const struct exception_table_entry *x, struct pt_regs *regs)
 	/* jump over faulting load and clear dest register */
 	if (reg != DONT_CLEAR)
 		*(unsigned long *)((void *)regs + reg) = 0;
+	/* 跳过当前产生异常的 JIT 指令。 */
 	regs->ip += insn_len;
-
 	return true;
 }
 

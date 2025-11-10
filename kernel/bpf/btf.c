@@ -4066,6 +4066,10 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 	struct btf_record *rec;
 	int ret, i, cnt;
 
+	/* 这里会遍历t中所有的成员，并解析其中的特定字段。对于固定的类型（比如spinlock)，
+	 * 它会根据type的名称（字符串）判断其是否是目标类型。对于特殊的类型（如kptr），
+	 * 它会根据tag（btf_type_tag定义）来判断。
+	 */
 	ret = btf_find_field(btf, t, field_mask, info_arr, ARRAY_SIZE(info_arr));
 	if (ret < 0)
 		return ERR_PTR(ret);
@@ -4086,6 +4090,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 	rec->wq_off = -EINVAL;
 	rec->refcount_off = -EINVAL;
 	rec->task_work_off = -EINVAL;
+	/* 遍历特殊 BTF 字段并记录偏移，后续统一做合法性检查。 */
 	for (i = 0; i < cnt; i++) {
 		field_type_size = btf_field_type_size(info_arr[i].type);
 		if (info_arr[i].off + field_type_size > value_size) {
@@ -4105,6 +4110,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 		rec->fields[i].size = field_type_size;
 
 		switch (info_arr[i].type) {
+		/* 对于spinlock，它会把spinlock在结构体中的offset保存下来。 */
 		case BPF_SPIN_LOCK:
 			WARN_ON_ONCE(rec->spin_lock_off >= 0);
 			/* Cache offset for faster lookup at runtime */

@@ -196,6 +196,11 @@ enum btf_field_type {
 	BPF_TIMER      = (1 << 1),
 	/* 这个代表的应该是这个kptr没有引用计数，可以存储PTR_UNTRUSTED类型的指针 */
 	BPF_KPTR_UNREF = (1 << 2),
+	/* 带有引用技术的trust类型的内核指针。这种类型的指针，要么在当前prog中通过
+	 * release进行释放，要么就是通过bpf_kptr_xchg保存到map中。保存到map中的
+	 * 指针，在map被删除时，会自动释放。这也意味着，map中保存的指针，只能被
+	 * 引用一次。
+	 */
 	BPF_KPTR_REF   = (1 << 3),
 	BPF_KPTR_PERCPU = (1 << 4),
 	BPF_KPTR       = BPF_KPTR_UNREF | BPF_KPTR_REF | BPF_KPTR_PERCPU,
@@ -258,10 +263,13 @@ struct btf_field {
 struct btf_record {
 	u32 cnt;
 	u32 field_mask;
+	/* 普通自旋锁 */
 	int spin_lock_off;
+	/* 可以重入（嵌套）的自旋锁。 */
 	int res_spin_lock_off;
 	int timer_off;
 	int wq_off;
+	/* 引用计数，即存在bpf_refcount类型的结构体 */
 	int refcount_off;
 	int task_work_off;
 	struct btf_field fields[];

@@ -8751,6 +8751,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 	u32 spin_lock_off;
 	int err;
 
+	/* 检查spinlock的offset是否是常量，且寄存器指向的类型必须为map_value。
+	 * 然后再检查对应的offset是不是指向正确的spinlock结构体。
+	 */
 	if (!is_const) {
 		verbose(env,
 			"R%d doesn't have constant offset. %s_lock has to be at the constant offset\n",
@@ -8790,6 +8793,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 		else
 			ptr = btf;
 
+		/* spinlock嵌套检查，不允许嵌套，防止死锁。 */
 		if (!is_res_lock && cur->active_locks) {
 			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, 0, NULL)) {
 				verbose(env,
@@ -8797,6 +8801,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 				return -EINVAL;
 			}
 		} else if (is_res_lock && cur->active_locks) {
+			/* 可重入的自旋锁检查逻辑，不允许lock同一个锁两次 */
 			if (find_lock_state(env->cur_state, REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_IRQ, reg->id, ptr)) {
 				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
 				return -EINVAL;
@@ -10221,6 +10226,9 @@ skip_type_check:
 		meta->ret_btf_id = reg->btf_id;
 		break;
 	case ARG_PTR_TO_SPIN_LOCK:
+		/* 针对spinlock的处理逻辑。如果helper函数的参数的类型是spinlock，
+		 * 那么对其进行合法性检查。
+		 */
 		if (in_rbtree_lock_required_cb(env)) {
 			verbose(env, "can't spin_{lock,unlock} in rbtree cb\n");
 			return -EACCES;

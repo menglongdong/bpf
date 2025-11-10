@@ -2826,10 +2826,11 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u64 offset,
 	case BPF_DYNPTR_TYPE_RINGBUF:
 		return ptr->data + ptr->offset + offset;
 	case BPF_DYNPTR_TYPE_SKB:
-		if (buffer__nullable)
-			return skb_header_pointer(ptr->data, ptr->offset + offset, len, buffer__nullable);
-		else
-			return skb_pointer_if_linear(ptr->data, ptr->offset + offset, len);
+	if (buffer__nullable)
+		/* 指定 buffer 时：线性区直接返回，否则拷贝到 buffer。 */
+		return skb_header_pointer(ptr->data, ptr->offset + offset, len, buffer__nullable);
+	else
+		return skb_pointer_if_linear(ptr->data, ptr->offset + offset, len);
 	case BPF_DYNPTR_TYPE_XDP:
 	{
 		void *xdp_ptr = bpf_xdp_pointer(ptr->data, ptr->offset + offset, len);
