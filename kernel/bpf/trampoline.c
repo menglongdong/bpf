@@ -42,8 +42,10 @@ static struct bpf_trampoline *direct_ops_ip_lookup(struct ftrace_ops *ops, unsig
 	mutex_lock(&trampoline_mutex);
 	head_ip = &trampoline_ip_table[hash_64(ip, TRAMPOLINE_HASH_BITS)];
 	hlist_for_each_entry(tr, head_ip, hlist_ip) {
-		if (tr->ip == ip)
+		if (tr->ip == ip) {
+			refcount_inc(&tr->refcnt);
 			goto out;
+		}
 	}
 	tr = NULL;
 out:
@@ -53,7 +55,10 @@ out:
 #else
 static struct bpf_trampoline *direct_ops_ip_lookup(struct ftrace_ops *ops, unsigned long ip)
 {
-	return ops->private;
+	struct bpf_trampoline *tr = ops->private;
+
+	refcount_inc(&tr->refcnt);
+	return tr;
 }
 #endif /* CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS */
 
@@ -67,6 +72,7 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 	if (!tr)
 		return -EINVAL;
 
+	bpf_trampoline_put(tr);
 	if (cmd == FTRACE_OPS_CMD_ENABLE_SHARE_IPMODIFY_SELF) {
 		/* This is called inside register_ftrace_direct_multi(), so
 		 * tr->mutex is already locked.
@@ -185,26 +191,33 @@ static int direct_ops_alloc(struct bpf_trampoline *tr)
 
 static void direct_ops_free(struct bpf_trampoline *tr) { }
 
-static struct ftrace_hash *hash_from(unsigned long ip, void *addr)
+static struct ftrace_hash *hash_from(unsigned long *ips, void *addr, int cnt)
 {
 	struct ftrace_hash *hash;
+	unsigned long ip;
 
-	ip = ftrace_location(ip);
-	if (!ip)
-		return NULL;
 	hash = alloc_ftrace_hash(FTRACE_HASH_DEFAULT_BITS);
 	if (!hash)
 		return NULL;
-	if (!add_hash_entry_direct(hash, ip, (unsigned long) addr)) {
-		free_ftrace_hash(hash);
-		return NULL;
+
+	for (int i = 0; i < cnt; i++) {
+		ip = ftrace_location(ips[i]);
+		if (!ip) {
+			free_ftrace_hash(hash);
+			return NULL;
+		}
+		if (!add_hash_entry_direct(hash, ip, (unsigned long) addr)) {
+			free_ftrace_hash(hash);
+			return NULL;
+		}
 	}
+
 	return hash;
 }
 
-static int direct_ops_add(struct ftrace_ops *ops, unsigned long ip, void *addr)
+static int direct_ops_add(struct ftrace_ops *ops, unsigned long *ips, void *addr, int cnt)
 {
-	struct ftrace_hash *hash = hash_from(ip, addr);
+	struct ftrace_hash *hash = hash_from(ips, addr, cnt);
 	int err = -ENOMEM;
 
 	if (hash)
@@ -213,9 +226,9 @@ static int direct_ops_add(struct ftrace_ops *ops, unsigned long ip, void *addr)
 	return err;
 }
 
-static int direct_ops_del(struct ftrace_ops *ops, unsigned long ip, void *addr)
+static int direct_ops_del(struct ftrace_ops *ops, unsigned long *ips, void *addr, int cnt)
 {
-	struct ftrace_hash *hash = hash_from(ip, addr);
+	struct ftrace_hash *hash = hash_from(ips, addr, cnt);
 	int err = -ENOMEM;
 
 	if (hash)
@@ -224,9 +237,9 @@ static int direct_ops_del(struct ftrace_ops *ops, unsigned long ip, void *addr)
 	return err;
 }
 
-static int direct_ops_mod(struct ftrace_ops *ops, unsigned long ip, void *addr, bool lock_direct_mutex)
+static int direct_ops_mod(struct ftrace_ops *ops, unsigned long *ips, void *addr, int cnt, bool lock_direct_mutex)
 {
-	struct ftrace_hash *hash = hash_from(ip, addr);
+	struct ftrace_hash *hash = hash_from(ips, addr, cnt);
 	int err = -ENOMEM;
 
 	if (hash)
@@ -351,7 +364,7 @@ static int unregister_fentry(struct bpf_trampoline *tr, u32 orig_flags,
 	int ret;
 
 	if (tr->func.ftrace_managed)
-		ret = direct_ops_del(tr->fops, tr->ip, old_addr);
+		ret = direct_ops_del(tr->fops, &tr->ip, old_addr, 1);
 	else
 		ret = bpf_trampoline_update_fentry(tr, orig_flags, old_addr, NULL);
 
@@ -365,7 +378,7 @@ static int modify_fentry(struct bpf_trampoline *tr, u32 orig_flags,
 	int ret;
 
 	if (tr->func.ftrace_managed) {
-		ret = direct_ops_mod(tr->fops, tr->ip, new_addr, lock_direct_mutex);
+		ret = direct_ops_mod(tr->fops, &tr->ip, new_addr, 1, lock_direct_mutex);
 	} else {
 		ret = bpf_trampoline_update_fentry(tr, orig_flags, old_addr,
 						   new_addr);
@@ -388,7 +401,7 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	}
 
 	if (tr->func.ftrace_managed) {
-		ret = direct_ops_add(tr->fops, tr->ip, new_addr);
+		ret = direct_ops_add(tr->fops, &tr->ip, new_addr, 1);
 	} else {
 		ret = bpf_trampoline_update_fentry(tr, 0, NULL, new_addr);
 	}
