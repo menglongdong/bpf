@@ -825,6 +825,12 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	return err;
 }
 
+#define bpf_tramp_for_each_link_begin(tr, link)				\
+	for (int ___kind = 0; ___kind < BPF_TRAMP_MAX; ___kind++) {	\
+		hlist_for_each_entry(link, &tr->progs_hlist[___kind],	\
+				     tramp_hlist)
+#define bpf_tramp_for_each_link_end() }
+
 int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 			     struct bpf_trampoline *tr,
 			     struct bpf_prog *tgt_prog)
@@ -1041,16 +1047,13 @@ static struct bpf_shim_tramp_link *cgroup_shim_find(struct bpf_trampoline *tr,
 						    bpf_func_t bpf_func)
 {
 	struct bpf_tramp_link *link;
-	int kind;
 
-	for (kind = 0; kind < BPF_TRAMP_MAX; kind++) {
-		hlist_for_each_entry(link, &tr->progs_hlist[kind], tramp_hlist) {
-			struct bpf_prog *p = link->link.prog;
+	bpf_tramp_for_each_link_begin(tr, link) {
+		struct bpf_prog *p = link->link.prog;
 
-			if (p->bpf_func == bpf_func)
-				return container_of(link, struct bpf_shim_tramp_link, link);
-		}
-	}
+		if (p->bpf_func == bpf_func)
+			return container_of(link, struct bpf_shim_tramp_link, link);
+	} bpf_tramp_for_each_link_end();
 
 	return NULL;
 }
