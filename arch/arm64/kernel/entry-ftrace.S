@@ -56,6 +56,9 @@ SYM_CODE_START(ftrace_caller)
 	 * If the op has a direct call, handle it immediately without
 	 * saving/restoring registers.
 	 */
+	/* 这里是当前的ops是唯一是ops，且是direct call的情况。这种情况下，由于目的
+	 * 地址不在范围内，因此需要用这种方式进行处理。
+	 */
 	ldr	x17, [x11, #FTRACE_OPS_DIRECT_CALL]		// op->direct_call
 	cbnz	x17, ftrace_caller_direct
 #endif
