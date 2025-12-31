@@ -195,6 +195,17 @@ SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 	call ftrace_stub
 
 	/* Handlers can change the RIP */
+	/*
+	 * 对于call模式，这里的栈结构是：
+	 *   rip1	-> caller of foo
+	 *   rip2	-> return to foo, foo + 4
+	 * 所以这里修改的应该是rip2的值，使得在return的时候，可以直接跳转到
+	 * 热补丁的函数地址上面去。
+	 *
+	 * 对于jmp模式，这里的栈结构是：
+	 *   rip1	-> caller of foo
+	 * 所以这里就不能再进行替换了，我们需要把这一行删除掉。
+	 */
 	movq RIP(%rsp), %rax
 	movq %rax, MCOUNT_REG_SIZE(%rsp)
 

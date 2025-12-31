@@ -13587,6 +13587,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
+		/* 参数名字里面带__ign的，都会跳过检查。 */
 		if (is_kfunc_arg_ignore(btf, &args[i]))
 			continue;
 
@@ -24140,6 +24141,13 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
+			/* 针对kfunc的特定处理，针对当前的指令进行适配。这里当前
+			 * 的指令必定是一个call指令。
+			 *
+			 * 这里在适配过程中，可能会跳过这个call指令，这种情况下
+			 * 就相当于进行了内联；也可能在call前面或者后面增加一些
+			 * 指令，这种情况下相当于做了一些预处理。
+			 */
 			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
 			if (ret)
 				return ret;
