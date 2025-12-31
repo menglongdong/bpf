@@ -40,6 +40,7 @@
 #endif
 
 #define __percpu_prefix
+/* 这里其实就相对于：__attribute__((address_space(__seg_gs))) */
 #define __percpu_seg_override	CONCATENATE(__seg_, __percpu_seg)
 
 #else /* !CONFIG_CC_HAS_NAMED_AS: */
@@ -88,6 +89,10 @@
 
 #endif /* CONFIG_SMP */
 
+/* USE_TYPEOF_UNQUAL代表当前的编译器是否支持__typeof_unqual__。如果支持的话，那么
+ * typeof就会返回携带限定符的类型。否则，就要手动在这里加上__percpu_seg_override
+ * 的类型限定符，从而让编译器知道这是一个gs段的变量。
+ */
 #if defined(CONFIG_USE_X86_SEG_SUPPORT) && defined(USE_TYPEOF_UNQUAL)
 # define __my_cpu_type(var)	typeof(var)
 # define __my_cpu_ptr(ptr)	(ptr)
@@ -97,6 +102,11 @@
 #else
 # define __my_cpu_type(var)	typeof(var) __percpu_seg_override
 # define __my_cpu_ptr(ptr)	(__my_cpu_type(*(ptr))*)(__force uintptr_t)(ptr)
+/* 这里和上面的区别是这里会给变量加上__percpu_seg_override限定符，类似于：
+ *   *(typeof(var) __percpu_seg_override *(__force uintptr_t)(&(var)))
+ * 这种效果，单纯的就是实现给原来的变量增加几个限定符的作用，从而让编译器知道
+ * 这个变量是通过gs段来进行访问的。
+ */
 # define __my_cpu_var(var)	(*__my_cpu_ptr(&(var)))
 #endif
 
@@ -134,7 +144,10 @@
 #define __pcpu_reg_imm_8(x)	"re" (x)
 
 #ifdef CONFIG_USE_X86_SEG_SUPPORT
-
+/* 对于支持CONFIG_USE_X86_SEG_SUPPORT的情况，编译器会直接对被访问的变量生成
+ * 基于gs寄存器的访问指令。对于不支持的情况，这里内核会通过内联汇编的方式来直接
+ * 生成一个通过gs寄存器来进行数据访问的指令。
+ */
 #define __raw_cpu_read(size, qual, pcp)					\
 ({									\
 	*(qual __my_cpu_type(pcp) * __force)__my_cpu_ptr(&(pcp));	\
@@ -184,6 +197,13 @@ do {									\
 
 #endif /* CONFIG_USE_X86_SEG_SUPPORT */
 
+/* movq %%gs:%a[var], %[val]
+ * :[val]"=r" (pfo_val__)
+ * :[var]"i" (&(_var))
+ *
+ * 这里读取的是静态的变量，而不是动态分配出来的percpu变量。所以这里可以通过直接
+ * 取地址的方式来进行地址获取。
+ */
 #define __raw_cpu_read_stable(size, _var)				\
 ({									\
 	__pcpu_type_##size pfo_val__;					\

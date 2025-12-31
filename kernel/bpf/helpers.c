@@ -3090,12 +3090,13 @@ __bpf_kfunc int bpf_dynptr_memset(struct bpf_dynptr *p, u64 offset, u64 size, u8
 
 	return 0;
 }
-
+/* 通过这个函数获得到的指针会被打上 PTR_TRUSTED 的标志。 */
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
 }
 
+/* 通过这个函数获得到的指针会被打上PTR_UNTRUSTED的标志，代表着不可信任。 */
 __bpf_kfunc void *bpf_rdonly_cast(const void *obj__ign, u32 btf_id__k)
 {
 	return (void *)obj__ign;

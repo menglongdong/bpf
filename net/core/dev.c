@@ -7042,6 +7042,13 @@ static void __napi_busy_loop(unsigned int napi_id,
 	void *have_poll_lock = NULL;
 	struct napi_struct *napi;
 
+	/* 套接口的busy_read(busy_poll)的函数。这里会根据napi_id找到对应的napi结构体，
+	 * 然后调用对应的网卡驱动的poll函数。这里的处理逻辑和链路层收包是一样的，
+	 *
+	 * 在以阻塞方式收包的时候，这里的loop_end会传递进来sk_busy_loop_end函数。
+	 * 这个函数会判断套接口是否收取到了数据，如果没有的话，就判断是否超时了。
+	 * 超时了就直接退出收包流程。没有超时，就一直在这里循环检查。
+	 */
 	WARN_ON_ONCE(!rcu_read_lock_held());
 
 restart:
@@ -7070,6 +7077,9 @@ restart:
 					set_bit(NAPI_STATE_PREFER_BUSY_POLL, &napi->state);
 				goto count;
 			}
+			/* state如果和val相等，就将其设置为NAPIF_STATE_IN_BUSY_POLL | NAPIF_STATE_SCHED，
+			 * 并返回原来的值。
+			 */
 			if (cmpxchg(&napi->state, val,
 				    val | NAPIF_STATE_IN_BUSY_POLL |
 					  NAPIF_STATE_SCHED) != val) {
@@ -7077,6 +7087,9 @@ restart:
 					set_bit(NAPI_STATE_PREFER_BUSY_POLL, &napi->state);
 				goto count;
 			}
+			/* 这里通过poll的方式来获取到当前这个napi上面的锁，避免和
+			 * 软中断产生竞争。
+			 */
 			have_poll_lock = netpoll_poll_lock(napi);
 			napi_poll = napi->poll;
 		}

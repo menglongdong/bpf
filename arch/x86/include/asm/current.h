@@ -14,6 +14,9 @@ struct task_struct;
 
 DECLARE_PER_CPU_CACHE_HOT(struct task_struct *, current_task);
 /* const-qualified alias provided by the linker. */
+/* 这个const_current_task是current_task的别名，都是同一个东西，在vmlinux.lds.S中
+ * 进行链接的。
+ */
 DECLARE_PER_CPU_CACHE_HOT(struct task_struct * const __percpu_seg_override,
 			  const_current_task);
 

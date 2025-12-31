@@ -110,6 +110,9 @@
 #define DECLARE_PER_CPU(type, name)					\
 	DECLARE_PER_CPU_SECTION(type, name, "")
 
+/* 定义一个变量，并放到".data..percpu"段中。同时，会给这个变量加上
+ * __attribute__((address_space(__seg_gs)))的属性。
+ */
 #define DEFINE_PER_CPU(type, name)					\
 	DEFINE_PER_CPU_SECTION(type, name, "")
 
@@ -234,6 +237,14 @@ do {									\
 #define SHIFT_PERCPU_PTR(__p, __offset)					\
 	RELOC_HIDE(PERCPU_PTR(__p), (__offset))
 
+/* 所有的静态的percpu变量都会保存到一块连续的物理内存中。这个物理内存有个基地址，
+ * per_cpu_ptr通过在基地址上加上偏移量来访问不同CPU的变量。比如要访问3号CPU上面
+ * 的变量，那么就先获取3号CPU的偏移，而所有的偏移都保存到了一个全局数组里面：
+ *   __per_cpu_offset[]
+ *
+ * 可以看出来，当采用这个方式读取percpu变量的时候，不能使用gs寄存器的方式来进行
+ * 读取，而是要通过全局偏移量来进行读取，效率会低一些。
+ */
 #define per_cpu_ptr(ptr, cpu)						\
 ({									\
 	__verify_pcpu_ptr(ptr);						\
@@ -253,6 +264,13 @@ do {									\
 	SHIFT_PERCPU_PTR(ptr, my_cpu_offset);				\
 })
 #else
+/* 将percpu变量的地址读取出来，这里不会使用gs寄存器，而是读取当前CPU的偏移量，再加上
+ * 这个地址来实现的。可以看出来，任何对于这个地址的访问，都会变成对全局偏移量的访问。
+ * 也就是说，percpu的变量是不能直接访问的。
+ *
+ * 也可以看出来，当我们对一个percpu变量取地址的时候，获取到的是其相对于基地址的
+ * 偏移长度，这个偏移长度是可以直接拿来使用的。
+ */
 #define this_cpu_ptr(ptr) raw_cpu_ptr(ptr)
 #endif
 
@@ -496,6 +514,7 @@ do {									\
  * Operations with implied preemption/interrupt protection.  These
  * operations can be used without worrying about preemption or interrupt.
  */
+/* 将percpu的变量的值读取出来，这里会生成gs寄存器读取指令。 */
 #define this_cpu_read(pcp)		__pcpu_size_call_return(this_cpu_read_, pcp)
 #define this_cpu_write(pcp, val)	__pcpu_size_call(this_cpu_write_, pcp, val)
 #define this_cpu_add(pcp, val)		__pcpu_size_call(this_cpu_add_, pcp, val)

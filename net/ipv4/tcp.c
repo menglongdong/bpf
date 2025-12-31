@@ -3071,6 +3071,9 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags,
 	if (unlikely(flags & MSG_ERRQUEUE))
 		return inet_recv_error(sk, msg, len, addr_len);
 
+	/* TCP收包的时候，如果当前收包队列里面没有数据，且当前套接口支持（开启了）
+	 * busy_loop，那么就直接进入到busy_loop的流程。
+	 */
 	if (sk_can_busy_loop(sk) &&
 	    skb_queue_empty_lockless(&sk->sk_receive_queue) &&
 	    sk->sk_state == TCP_ESTABLISHED)

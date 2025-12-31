@@ -7576,6 +7576,10 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * A regular RCU-protected pointer with __rcu tag can also be deemed
 		 * trusted if we are in an RCU CS. Such pointer can be NULL.
 		 */
+		/* 这里是关于trusted继承的问题。如果一个指针是trusted的，那么通过
+		 * 这个指针得到的指针不是trusted的，除非在一些特定的条件下。比如，
+		 * 特定的结构体；数据访问是发生在rcu保护范围内的等。
+		 */
 		if (type_is_trusted(env, reg, field_name, btf_id)) {
 			flag |= PTR_TRUSTED;
 		} else if (type_is_trusted_or_null(env, reg, field_name, btf_id)) {
@@ -8514,6 +8518,9 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	u32 *max_access;
 
+	/* 这个是检查内存访问的函数，大部分的需要检查内存访问的地方都会调用这个函数
+	 * 来进行。不要被名字里面的"helper"迷惑了，他不是用于bpf helper的。
+	 */
 	switch (base_type(reg->type)) {
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
@@ -13653,6 +13660,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			return -EINVAL;
 		}
 
+		/* kfunc 参数可能为 NULL 且未标注 nullable 时，拒绝调用。 */
 		if ((register_is_null(reg) || type_may_be_null(reg->type)) &&
 		    !is_kfunc_arg_nullable(meta->btf, &args[i])) {
 			verbose(env, "Possibly NULL pointer passed to trusted arg%d\n", i);
@@ -13862,6 +13870,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 			}
+			/* 针对bpf_for()的处理逻辑。其他的iter的逻辑好像走的也是这里。
+			 * 这里会对函数的入参（实参）进行检查，
+			 */
 			ret = process_iter_arg(env, regno, insn_idx, meta);
 			if (ret < 0)
 				return ret;
@@ -23831,6 +23842,11 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	}
 
 	for (i = 0; i < insn_cnt;) {
+		/* cnt: 一个临时变量，用于保存当前指令所衍生的指令的长度，用于
+		 * 计算delta；
+		 * delta: 偏移。由于指令变多了，这个记录了当前指令在真正的指令数组
+		 * 中的索引的偏移。i + delta才是真正的指令的索引。
+		 */
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
 			    (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV)) {
@@ -23845,7 +23861,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 
 		if (env->insn_aux_data[i + delta].needs_zext)
 			/* Convert BPF_CLASS(insn->code) == BPF_ALU64 to 32-bit ALU */
-			insn->code = BPF_ALU | BPF_OP(insn->code) | BPF_SRC(insn->code);
+-			insn->code = BPF_ALU | BPF_OP(insn->code) | BPF_SRC(insn->code);
 
 		/* Make sdiv/smod divide-by-minus-one exceptions impossible. */
 		if ((insn->code == (BPF_ALU64 | BPF_MOD | BPF_K) ||
@@ -24136,10 +24152,16 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		}
 
+		/* 下面的都是处理call指令的情况。对于BPF_PSEUDO_CALL（调用其他
+		 * BPF程序），跳过（在其他地方处理）。
+		 */
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			goto next_insn;
+		/* kfunc进行处理的地方，包括修正call指令，使其指向正确的内核函数
+		 * 地址。
+		 */
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			/* 针对kfunc的特定处理，针对当前的指令进行适配。这里当前
 			 * 的指令必定是一个call指令。
@@ -24164,7 +24186,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		}
 
-		/* Skip inlining the helper call if the JIT does it. */
+		/* JIT会对一些helper函数进行inline，这种情况下就跳过这些函数的处理，
+		 * 将他们留给JIT处理。
+		 */
 		if (bpf_jit_inlines_helper_call(insn->imm))
 			goto next_insn;
 
@@ -24325,6 +24349,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		/* BPF_EMIT_CALL() assumptions in some of the map_gen_lookup
 		 * and other inlining handlers are currently limited to 64 bit
 		 * only.
+		 */
+		/* 针对特定的helper函数，比如map的数据查找，有的是可以进行优化的，
+		 * 比如修正为数据的地址直接进行访问。
 		 */
 		if (prog->jit_requested && BITS_PER_LONG == 64 &&
 		    (insn->imm == BPF_FUNC_map_lookup_elem ||
@@ -24671,6 +24698,9 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 patch_call_imm:
+		/* 默认的进行修正helper call的地方。先找到对应的helper函数的元数据，
+		 * 然后获取函数地址，最后修改imm为对应的地址偏移。
+		 */
 		fn = env->ops->get_func_proto(insn->imm, env->prog);
 		/* all functions that have prototype and verifier allowed
 		 * programs to call them, must be real in-kernel functions
@@ -26666,6 +26696,9 @@ skip_full_check:
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = convert_ctx_accesses(env);
 
+	/* 这里会进行各种fixup，比如一些函数的内联等。可以看出来，这里的操作都是
+	 * 通过BPF检查之后才进行的。
+	 */
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 

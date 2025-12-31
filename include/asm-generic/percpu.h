@@ -33,6 +33,7 @@
 #ifndef __per_cpu_offset
 extern unsigned long __per_cpu_offset[NR_CPUS];
 
+/* 根据CPU编号，获取对应CPU的偏移量。对于x86_64架构，会走这里的代码路径。 */
 #define per_cpu_offset(x) (__per_cpu_offset[x])
 #endif
 
@@ -43,6 +44,9 @@ extern unsigned long __per_cpu_offset[NR_CPUS];
  * current processor.
  */
 #ifndef __my_cpu_offset
+/* 对于x86_64架构，它不会走这里的路径，而是会定义一个percpu变量，里面存储了每个
+ * 当前CPU的偏移量，这个变量是 this_cpu_off.
+ */
 #define __my_cpu_offset per_cpu_offset(raw_smp_processor_id())
 #endif
 #ifdef CONFIG_DEBUG_PREEMPT

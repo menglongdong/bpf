@@ -6968,6 +6968,10 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	/* 下面的代码会把btf信息（包括btf_id）设置到info，从而传递给这个函数的调用者 */
 
 	info->reg_type = PTR_TO_BTF_ID;
+	/* 这里用于检查是否对目标函数的参数进行trust。这里是分情况的，对于某些情况，
+	 * 比如LSM（部分），tracepoint等是可以信任的；对于某些情况，比如fentry，fexit等是
+	 * 不可以信任的。
+	 */
 	if (prog_args_trusted(prog))
 		info->reg_type |= PTR_TRUSTED;
 
