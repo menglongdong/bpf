@@ -474,6 +474,14 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 		.off   = 0,					\
 		.imm   = BPF_CALL_IMM(FUNC) })
 
+#define BPF_EMIT_CALL_ID(FUNC)					\
+	((struct bpf_insn) {					\
+		.code  = BPF_JMP | BPF_CALL,			\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
+		.off   = 0,					\
+		.imm   = FUNC })
+
 /* Kfunc call */
 
 #define BPF_CALL_KFUNC(OFF, IMM)				\

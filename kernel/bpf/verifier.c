@@ -12380,6 +12380,7 @@ enum special_kfunc_type {
 	KF___bpf_trap,
 	KF_bpf_task_work_schedule_signal_impl,
 	KF_bpf_task_work_schedule_resume_impl,
+	KF_bpf_session_is_return,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12454,6 +12455,7 @@ BTF_ID(func, bpf_dynptr_file_discard)
 BTF_ID(func, __bpf_trap)
 BTF_ID(func, bpf_task_work_schedule_signal_impl)
 BTF_ID(func, bpf_task_work_schedule_resume_impl)
+BTF_ID(func, bpf_session_is_return)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -22555,6 +22557,26 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		   desc->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_session_cookie]) {
+		/* call get_current_task() */
+		insn_buf[0] = BPF_EMIT_CALL_ID(BPF_FUNC_get_current_task);
+		insn_buf[1] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0,
+					  offsetof(struct task_struct, bpf_ctx));
+		insn_buf[2] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0,
+					  offsetof(struct bpf_session_run_ctx, data));
+
+		*cnt = 3;
+		err = -EAGAIN;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_session_is_return]) {
+		/* call get_current_task() */
+		insn_buf[0] = BPF_EMIT_CALL_ID(BPF_FUNC_get_current_task);
+		insn_buf[1] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0,
+					  offsetof(struct task_struct, bpf_ctx));
+		insn_buf[2] = BPF_LDX_MEM(BPF_B, BPF_REG_0, BPF_REG_0,
+					  offsetof(struct bpf_session_run_ctx, is_return));
+
+		*cnt = 3;
+		err = -EAGAIN;
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
@@ -22567,7 +22589,7 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[idx++] = *insn;
 		*cnt = idx;
 	}
-	return 0;
+	return err;
 }
 
 /* The function requires that first instruction in 'patch' is insnsi[prog->len - 1] */
@@ -22607,7 +22629,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	enum bpf_prog_type prog_type = resolve_prog_type(prog);
 	struct bpf_insn *insn = prog->insnsi;
 	const struct bpf_func_proto *fn;
-	const int insn_cnt = prog->len;
+	int insn_cnt = prog->len;
 	const struct bpf_map_ops *ops;
 	struct bpf_insn_aux_data *aux;
 	struct bpf_insn *insn_buf = env->insn_buf;
@@ -22651,7 +22673,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (env->insn_aux_data[i + delta].needs_zext)
 			/* Convert BPF_CLASS(insn->code) == BPF_ALU64 to 32-bit ALU */
 			insn->code = BPF_ALU | BPF_OP(insn->code) | BPF_SRC(insn->code);
-
+again:
 		/* Make sdiv/smod divide-by-minus-one exceptions impossible. */
 		if ((insn->code == (BPF_ALU64 | BPF_MOD | BPF_K) ||
 		     insn->code == (BPF_ALU64 | BPF_DIV | BPF_K) ||
@@ -22947,7 +22969,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
-			if (ret)
+			if (ret && ret != -EAGAIN)
 				return ret;
 			if (cnt == 0)
 				goto next_insn;
@@ -22956,10 +22978,16 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			if (!new_prog)
 				return -ENOMEM;
 
-			delta	 += cnt - 1;
 			env->prog = prog = new_prog;
-			insn	  = new_prog->insnsi + i + delta;
-			goto next_insn;
+			if (ret == -EAGAIN) {
+				insn_cnt += cnt - 1;
+				insn	  = new_prog->insnsi + i + delta;
+				goto again;
+			} else {
+				delta	 += cnt - 1;
+				insn	  = new_prog->insnsi + i + delta;
+				goto next_insn;
+			}
 		}
 
 		/* Skip inlining the helper call if the JIT does it. */

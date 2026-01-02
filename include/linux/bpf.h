@@ -2321,6 +2321,12 @@ struct bpf_tramp_run_ctx {
 	struct bpf_run_ctx *saved_run_ctx;
 };
 
+struct bpf_session_run_ctx {
+	struct bpf_run_ctx run_ctx;
+	bool is_return;
+	void *data;
+};
+
 static inline struct bpf_run_ctx *bpf_set_run_ctx(struct bpf_run_ctx *new_ctx)
 {
 	struct bpf_run_ctx *old_ctx = NULL;

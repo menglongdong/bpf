@@ -2268,12 +2268,6 @@ static int __init bpf_event_init(void)
 fs_initcall(bpf_event_init);
 #endif /* CONFIG_MODULES */
 
-struct bpf_session_run_ctx {
-	struct bpf_run_ctx run_ctx;
-	bool is_return;
-	void *data;
-};
-
 #ifdef CONFIG_FPROBE
 struct bpf_kprobe_multi_link {
 	struct bpf_link link;
