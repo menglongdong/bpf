@@ -1149,6 +1149,9 @@ static void kfree_skbmem(struct sk_buff *skb)
 {
 	struct sk_buff_fclones *fclones;
 
+	/* 这里是释放skb结构体的逻辑。这里会检查是否是fclone的情况，如果是的话，就
+	 * 根据其引用计数决定是否进行释放。
+	 */
 	switch (skb->fclone) {
 	case SKB_FCLONE_UNAVAILABLE:
 		kmem_cache_free(net_hotdata.skbuff_cache, skb);

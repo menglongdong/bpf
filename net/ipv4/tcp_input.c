@@ -3991,6 +3991,9 @@ static int tcp_clean_rtx_queue(struct sock *sk, const struct sk_buff *ack_skb,
 		if (unlikely(skb == tp->retransmit_skb_hint))
 			tp->retransmit_skb_hint = NULL;
 		tcp_highest_sack_replace(sk, skb, next);
+		/* 这里的skb（rtx队列中的skb）不会被别的地方使用，所以这里甚至都
+		 * 没有根据引用计数来进行报文的释放，而是直接释放。
+		 */
 		tcp_rtx_queue_unlink_and_free(skb, sk);
 	}
 

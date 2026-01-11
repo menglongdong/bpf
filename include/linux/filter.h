@@ -1750,6 +1750,7 @@ static inline bool bpf_sk_lookup_run_v6(const struct net *net, int protocol,
 }
 #endif /* IS_ENABLED(CONFIG_IPV6) */
 
+/* 把重定向信息保存到当前的进程上面的bpf_net_context上面。 */
 static __always_inline long __bpf_xdp_redirect_map(struct bpf_map *map, u64 index,
 						   u64 flags, const u64 flag_mask,
 						   void *lookup_elem(struct bpf_map *map, u32 key))

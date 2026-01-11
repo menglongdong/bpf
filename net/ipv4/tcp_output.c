@@ -1568,6 +1568,14 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		/* 这里是重传的情况。对于重传的报文，这里会先克隆一份，然后传的是克隆
 		 * 出来的那个报文。这样，在发送完成后，释放的也是克隆出来的，而不是
 		 * rtx队列中的报文，这样，只有等到ACK的时候，才会释放rtx中的报文。
+		 *
+		 * 这个不仅是重传的逻辑，也是正常的数据发送的逻辑。这里是skb其实
+		 * 是一个sk_buff_fclones结构，一式两份。每次发送的时候，都是克隆（获取
+		 * fake skb），然后发送。这里，skb大概率是还没有克隆过，或者已经克隆过，
+		 * 但是克隆的skb已经被释放了。
+		 *
+		 * 这里也可以看出来，TCP的重传队列中的报文，其实只保存了TCP数据，是
+		 * 没有任何的TCP头部的。
 		 */
 		tcp_skb_tsorted_save(oskb) {
 			if (unlikely(skb_cloned(oskb)))

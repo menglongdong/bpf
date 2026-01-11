@@ -10,6 +10,10 @@
 #include <linux/sched.h>
 #include <linux/btf_ids.h>
 
+/* 本质上是个数组，里面存储了struct xdp_sock类型的指针，数组的长度是固定的。
+ * 在verifier阶段，会对xskmap的lookup进行内联，从而提升性能。
+ */
+
 #include "xsk.h"
 
 static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
@@ -239,6 +243,14 @@ static long xsk_map_delete_elem(struct bpf_map *map, void *key)
 	return 0;
 }
 
+/* 这个是xsk套接口重定向的逻辑。具体来说，在XDP程序中，当收到网络报文的时候，BPF
+ * 程序调用bpf_xdp_redirect_map()进行报文的重定向，这个过程中会把重定向信息保存到
+ * 当前进程上面的 bpf_net_context->bpf_redirect_info。
+ *
+ * 在BPF程序调用完成后，如果返回值是XDP_REDIRECT，那么会进行报文的重定向，具体可以
+ * 参考do_xdp_generic中的实现。简单来说，它的重定向逻辑和XDP的网卡重定向是一样的，
+ * 只不过这里是重定向到xsk套接口。
+ */
 static long xsk_map_redirect(struct bpf_map *map, u64 index, u64 flags)
 {
 	return __bpf_xdp_redirect_map(map, index, flags, 0,
