@@ -928,6 +928,9 @@ err_out:
 	return ERR_PTR(-EINVAL);
 }
 
+/* DEVMAP在更新（添加）的时候，可以指定两个参数：网卡的ifindex和BPF程序的fd。这也就
+ * 意味着，在把网卡添加到map中的时候，是可以指定一个BPF程序的。
+ */
 static long __dev_map_update_elem(struct net *net, struct bpf_map *map,
 				  void *key, void *value, u64 map_flags)
 {

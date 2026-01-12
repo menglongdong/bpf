@@ -150,6 +150,10 @@ static int __xsk_rcv_zc(struct xdp_sock *xs, struct xdp_buff_xsk *xskb, u32 len,
 	int err;
 
 	addr = xp_get_handle(xskb, xskb->pool);
+	/* 这个逻辑很简单，就是将这个xskb对应的内存地址放到rx队列中去。放进去之后，
+	 * 这个xskb就会被直接释放掉了。可以看出来，在收包阶段，其实是没有xdp_buff的
+	 * 缓冲的，都是一次性使用的。
+	 */
 	err = xskq_prod_reserve_desc(xs->rx, addr, len, flags);
 	if (err) {
 		xs->rx_queue_full++;
@@ -257,6 +261,7 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 	struct xdp_buff *xsk_xdp;
 	skb_frag_t *frag;
 
+	/* 计算各种长度，包括数据长度、元数据长度和剩余长度 */
 	from_len = xdp->data_end - copy_from;
 	meta_len = xdp->data - copy_from;
 	rem = len + meta_len;
@@ -269,8 +274,13 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 			xs->rx_dropped++;
 			return -ENOMEM;
 		}
+		/* 将数据（包括meta数据）拷贝到这个xdp_buff上面。这里可以看出来，
+		 * 在收包的时候，是需要进行一次数据拷贝的，也就是至少要将网卡传递
+		 * 过来的数据进行一次拷贝到ringbuf缓冲区。
+		 */
 		memcpy(xsk_xdp->data - meta_len, copy_from, rem);
 		xskb = container_of(xsk_xdp, struct xdp_buff_xsk, xdp);
+		/* 这个函数的作用主要是把这个xdp_buff放到rxtx环形缓冲区中。 */
 		err = __xsk_rcv_zc(xs, xskb, len, 0);
 		if (err) {
 			xsk_buff_free(xsk_xdp);
@@ -298,6 +308,11 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 		frag =  &sinfo->frags[0];
 	}
 
+	/* 这里处理的是存在sg数据的情况。这里会遍历所有的frag，为每个frag分配一个xdp_buff_xsk，
+	 * 并将数据拷贝到对应的缓冲区中。由于每个xskb的frame_size是固定的，因此
+	 * 如果报文的长度大于frame_size，那么就需要分配多个xskb来存储整个报文。
+	 * 这种情况下，会给xskb设置上XDP_PKT_CONTD的标志，代表后面还有报文。
+	 */
 	do {
 		u32 to_len = frame_size + meta_len;
 		u32 copied;
@@ -367,6 +382,7 @@ static void xsk_flush(struct xdp_sock *xs)
 
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
+	/* 这个长度应该是所有的数据长度，包括了分片区的数据。 */
 	u32 len = xdp_get_buff_len(xdp);
 	int err;
 
@@ -1075,6 +1091,10 @@ static int xsk_sendmsg(struct socket *sock, struct msghdr *m, size_t total_len)
 {
 	int ret;
 
+	/* 这个一个伪函数。这个函数不实现具体的数据发送逻辑，只是触发一下网卡的发包
+	 * 逻辑。xsk的报文发送是网卡层面的，由具体的驱动来提供实现。如果网卡驱动
+	 * 不支持，就会走xsk_generic_xmit的逻辑。
+	 */
 	rcu_read_lock();
 	ret = __xsk_sendmsg(sock, m, total_len);
 	rcu_read_unlock();
@@ -1112,6 +1132,9 @@ static int xsk_recvmsg(struct socket *sock, struct msghdr *m, size_t len, int fl
 {
 	int ret;
 
+	/* 这里的收包也不是真正的收包，它最多是触发一下（或者等一下）网卡收包，即等待
+	 * 收包ringbuf中的数据ready了。
+	 */
 	rcu_read_lock();
 	ret = __xsk_recvmsg(sock, m, len, flags);
 	rcu_read_unlock();

@@ -4504,6 +4504,7 @@ err:
 	return err;
 }
 
+/* 这个是网卡里面使用的代码 */
 int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 		    const struct bpf_prog *xdp_prog)
 {
@@ -4562,6 +4563,10 @@ static int xdp_do_generic_redirect_map(struct net_device *dev,
 			err = dev_map_redirect_multi(dev, skb, xdp_prog, map,
 						     flags & BPF_F_EXCLUDE_INGRESS);
 		} else {
+			/* 这里是DEVMAP的重定向逻辑。这里的重定向只会将报文进行发送，
+			 * 不能指定为ingress。在进行发送之前，会先调用对应的网卡设备
+			 * 上面的xdp程序来进行处理。
+			 */
 			err = dev_map_generic_redirect(fwd, skb, xdp_prog);
 		}
 		if (unlikely(err))
@@ -4574,6 +4579,13 @@ static int xdp_do_generic_redirect_map(struct net_device *dev,
 		consume_skb(skb);
 		break;
 	case BPF_MAP_TYPE_CPUMAP:
+		/* 这里是处理CPUMAP的地方。CPUMAP和DEVMAP类似，添加的时候可以指定
+		 * 一个CPU的索引以及一个BPF程序的fd。在进行重定向的时候，会先把
+		 * 这个报文放到这个cpu的entry的一个队列上面，然后唤醒这个entry
+		 * 上面的一个工作线程来处理，线程的callback函数为：cpu_map_kthread_run
+		 * 这个函数会调用这个CPU上面的BPF程序来处理这个报文，通过的话，就会
+		 * 将报文上送到内核协议栈。
+		 */
 		err = cpu_map_generic_redirect(fwd, skb);
 		if (unlikely(err))
 			goto err;
@@ -4605,6 +4617,7 @@ int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 	ri->flags = 0;
 	ri->map_type = BPF_MAP_TYPE_UNSPEC;
 
+	/* 这里是网卡重定向的逻辑，也就是原先的逻辑。 */
 	if (map_type == BPF_MAP_TYPE_UNSPEC && map_id == INT_MAX) {
 		fwd = dev_get_by_index_rcu(dev_net(dev), ri->tgt_index);
 		if (unlikely(!fwd)) {
@@ -4622,6 +4635,12 @@ int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 		return 0;
 	}
 
+	/* 这里是bpf_map重定向的逻辑，也就是xdp socket的逻辑。
+	 * 这里不仅处理了xsk的逻辑，还处理了devmap的逻辑。这种map会把网卡信息
+	 * 保存到设备里面，通过在重定向的时候指定对应的map_id，可以将报文重定向
+	 * 到对应的网卡设备上面。除了devmap，还可以将报文重定向到其他的CPU上面，
+	 * 也就是通过CPUMAP来实现的。
+	 */
 	return xdp_do_generic_redirect_map(dev, skb, xdp, xdp_prog, fwd, map_type, map_id, flags);
 err:
 	_trace_xdp_redirect_err(dev, xdp_prog, ri->tgt_index, err);

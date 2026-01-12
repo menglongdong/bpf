@@ -5934,7 +5934,10 @@ bpf_core_find_cands(struct bpf_object *obj, const struct btf *local_btf, __u32 l
 
 	/* Attempt to find target candidates in vmlinux BTF first */
 	main_btf = obj->btf_vmlinux_override ?: obj->btf_vmlinux;
-	/* 从vmlinux中查找所有的匹配的类型 */
+	/* 从vmlinux中查找所有的匹配的类型。这里可以看出来，是优先从vmlinux中
+	 * 进行btf type的检查。如果找到了，就不再找modules中的了。没有找到的话，
+	 * 就查找所有的modules中的btf type。
+	 */
 	err = bpf_core_add_cands(&local_cand, local_essent_len, main_btf, "vmlinux", 1, cands);
 	if (err)
 		goto err_out;

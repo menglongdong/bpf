@@ -550,6 +550,11 @@ struct xdp_buff *xp_alloc(struct xsk_buff_pool *pool)
 {
 	struct xdp_buff_xsk *xskb;
 
+	/* 这里是进行xskb分配的地方。优先从缓存中来拿xskb，如果缓存中没有了，那么就会
+	 * 进行分配。看起来每个xskb在数据中都有着一个对应的内存块，由data_hard_start
+	 * 指定。这里可以看出来，xsk的ringbuf和io_uring的类似，都采用了两层的架构
+	 * 设计。
+	 */
 	if (!pool->free_list_cnt) {
 		xskb = __xp_alloc(pool);
 		if (!xskb)

@@ -250,6 +250,9 @@ static long xsk_map_delete_elem(struct bpf_map *map, void *key)
  * 在BPF程序调用完成后，如果返回值是XDP_REDIRECT，那么会进行报文的重定向，具体可以
  * 参考do_xdp_generic中的实现。简单来说，它的重定向逻辑和XDP的网卡重定向是一样的，
  * 只不过这里是重定向到xsk套接口。
+ *
+ * 可以看出来，这里是xdp socket套接口收包的流程，即通过XDP程序来将网络报文重定向
+ * 到套接口上。发包的话，是通过共享内存来实现的（ringbuf缓冲区）。
  */
 static long xsk_map_redirect(struct bpf_map *map, u64 index, u64 flags)
 {
