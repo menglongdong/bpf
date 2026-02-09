@@ -7,6 +7,13 @@
 #include <linux/bpf.h>
 #include <linux/rcupdate_trace.h>
 
+/* BPF迭代器分为两种，一种是静态的迭代器，另一种是动态的迭代器。静态迭代器的原理：
+ * 挂载的时候，根据bpf prog创建出来一个bpf_link。然后使用BPF_ITER_CREATE命令
+ * 来根据这个link创建一个文件fd。这个文件fd可以进行读，读的时候会创建一个seq文件，
+ * 并调用这个link的上面的钩子函数。钩子函数会将这个seq文件传递给BPF程序，并调用
+ * 这个link上面的BPF程序。
+ */
+
 struct bpf_iter_target_info {
 	struct list_head list;
 	const struct bpf_iter_reg *reg_info;

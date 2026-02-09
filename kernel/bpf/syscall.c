@@ -1097,6 +1097,9 @@ static int bpf_map_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	mutex_lock(&map->freeze_mutex);
 
+	/* 将map数据mmap到用户态。对于只读的和被frozen的map，不允许进行映射，因为
+	 * 一旦映射就默认了可写（vma有write的标志）。
+	 */
 	if (vma->vm_flags & VM_WRITE) {
 		if (map->frozen) {
 			err = -EPERM;
@@ -3100,6 +3103,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	if (err < 0)
 		goto free_used_maps;
 
+	/* 这个函数会尝试对BPF程序进行JIT。 */
 	prog = bpf_prog_select_runtime(prog, &err);
 	if (err < 0)
 		goto free_used_maps;

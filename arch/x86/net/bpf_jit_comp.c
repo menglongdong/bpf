@@ -530,11 +530,43 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 	}
 	/* Exception callback receives FP as third parameter */
 	if (is_exception_cb) {
+		/* 给exception的callback函数增加序言。对于BPF程序而言，这个回调
+		 * 函数只有一个cookie参数。但是在内核中实际调用他的时候，会传递三个
+		 * 参数，第二和第三个参数分别是主程序的栈顶指针和基指针，具体可以参考
+		 * bpf_throw()的实现。
+		 *
+		 * 这里会将rsp和rbp寄存器设置为主程序的栈顶指针和基指针。这样，当前的
+		 * callback函数就宛如主程序一样。callback函数在return的时候，就会
+		 * 直接返回到主程序的调用者那里，跳过主程序剩余的代码。
+		 *
+		 * 栈帧布局：
+		 *  +-------------------------------+
+		 *  | main caller stack             |
+		 *  +-------------------------------+
+		 *  | return_to_kernel              | <- [BPm + 8]
+		 *  | saved_rbp_of_caller           | <- [BPm + 0], BPm = main rbp
+		 *  +-------------------------------+
+		 *  | main BPF locals / tailcall... |
+		 *  +-------------------------------+
+		 *  | saved_r12                     | <- [SPm + 32]
+		 *  | saved_rbx                     | <- [SPm + 24]
+		 *  | saved_r13                     | <- [SPm + 16]
+		 *  | saved_r14                     | <- [SPm +  8]
+		 *  | saved_r15                     | <- [SPm +  0], SPm = boundary 保存区起点
+		 *  +-------------------------------+
+		 *  | deeper subprog frame(s)       |
+		 *  +-------------------------------+
+		 *  | bpf_throw frame               | <- 当前 rsp 在更低处
+		 *  +-------------------------------+
+		 */
 		EMIT3(0x48, 0x89, 0xF4); /* mov rsp, rsi */
 		EMIT3(0x48, 0x89, 0xD5); /* mov rbp, rdx */
 		/* The main frame must have exception_boundary as true, so we
 		 * first restore those callee-saved regs from stack, before
 		 * reusing the stack frame.
+		 */
+		/* 可以对照do_jit()函数来看，如果是主程序，且调用了bpf_throw()，那么
+		 * 会将这些寄存器在主程序里面进行push操作，保存下来。
 		 */
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
@@ -1713,6 +1745,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		 * register, as we throw after entry into the kernel, which may
 		 * overwrite r12.
 		 */
+		/* 如果是主程序，而且有exception，那么就提前保存这些寄存器。 */
 		push_r12(&prog);
 		push_callee_regs(&prog, all_callee_regs_used);
 	} else {
@@ -2762,6 +2795,9 @@ emit_jmp:
 				if (emit_spectre_bhb_barrier(&prog, ip, bpf_prog))
 					return -EINVAL;
 			}
+			/* 这个看起来是存在异常回调的情况下，没有走到bpf_throw()的代码
+			 * 路径。由于我们在序言里面添加了一些push的操作，这里要进行恢复。
+			 */
 			if (bpf_prog->aux->exception_boundary) {
 				pop_callee_regs(&prog, all_callee_regs_used);
 				pop_r12(&prog);
@@ -3772,6 +3808,7 @@ struct x64_jit_data {
 #define MAX_PASSES 20
 #define PADDING_PASSES (MAX_PASSES - 5)
 
+/* 对外暴露的进行JIT的主函数。 */
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	struct bpf_binary_header *rw_header = NULL;

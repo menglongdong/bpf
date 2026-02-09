@@ -801,6 +801,7 @@ struct bpf_verifier_env {
 	bool strict_alignment;		/* perform strict pointer alignment checks */
 	bool test_state_freq;		/* test verifier with different pruning frequency */
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
+	/* 检查subprog的时候，会分配一个新的state，这个指向了当前正在检查的subprog对应的state */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	/* Search pruning optimization, array of list_heads for
 	 * lists of struct bpf_verifier_state_list.
@@ -854,6 +855,7 @@ struct bpf_verifier_env {
 	struct backtrack_state bt;
 	struct bpf_jmp_history_entry *cur_hist_ent;
 	u32 pass_cnt; /* number of times do_check() was called */
+	/* 当前BPF中子程序的数量，这里一个子程序被调用多次，也只会统计一次 */
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
 	u32 prev_insn_processed, insn_processed;

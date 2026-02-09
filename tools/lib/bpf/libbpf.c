@@ -3996,6 +3996,9 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			/* already processed during the first pass above */
 		} else if (sh->sh_type == SHT_PROGBITS && data->d_size > 0) {
 			if (sh->sh_flags & SHF_EXECINSTR) {
+				/* 解析BPF的ELF段中的指令段（可执行段）。如果是.text段，那说明是base
+				 * 指令集。
+				 */
 				if (strcmp(name, ".text") == 0)
 					obj->efile.text_shndx = idx;
 				err = bpf_object__add_programs(obj, data, name, idx);

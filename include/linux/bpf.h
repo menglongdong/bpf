@@ -1747,6 +1747,9 @@ struct bpf_prog_aux {
 	int cgroup_atype; /* enum cgroup_bpf_attach_type */
 	struct bpf_map *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	char name[BPF_OBJ_NAME_LEN];
+	/* 这个函数指针指向了当前BPF程序的异常回调子函数，在bpf_throw()里面会被调用。
+	 * 这个函数最后的return指令会被移除，具体可以参考bpf_throw()的实现。
+	 */
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 #ifdef CONFIG_SECURITY
 	void *security;

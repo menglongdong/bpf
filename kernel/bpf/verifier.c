@@ -3653,7 +3653,7 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 	int i, ret, insn_cnt = env->prog->len, ex_cb_insn;
 	struct bpf_insn *insn = env->prog->insnsi;
 
-	/* Add entry function. */
+	/* 这里可以看出来，主程序永远都是subprog里面的第一个实例。 */
 	ret = add_subprog(env, 0);
 	if (ret)
 		return ret;
@@ -3678,13 +3678,16 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 		if (bpf_pseudo_func(insn) || bpf_pseudo_call(insn))
 			ret = add_subprog(env, i + insn->imm + 1);
 		else
+			/* 对于kfunc的调用，可以看出来，kfunc_id放到了指令的imm里面，而这个
+			 * kfunc所在的btf（内核模块）的fd，则放到了指令的off里面。
+			 */
 			ret = add_kfunc_call(env, insn->imm, insn->off);
 
 		if (ret < 0)
 			return ret;
 	}
 
-	/* 找到BPF程序异常处理（主要就是page fault异常）函数。然后将这个函数的idx
+	/* 找到BPF程序异常处理（bpf_throw()）函数。然后将这个函数的idx
 	 * 保存到env->exception_callback_subprog中，并将其标记为异常处理回调
 	 * 函数。
 	 */
@@ -11093,10 +11096,20 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 
 	caller = state->frame[state->curframe];
-	/* 检查目标函数的原型和当前调用的参数类型是否匹配 */
+	/* 检查目标函数的原型和当前调用的参数类型是否匹配。这里是允许不匹配的，如果
+	 * 不匹配的话，目标函数会被标记为不可靠。那么，目标函数的参数实际上就不是btf
+	 * 类型的了，不能进行直接内存访问。这算是一种回退机制，因为有的时候编译器会
+	 * 对BPF程序的参数进行优化，比如移除不需要的参数等，导致不一致。
+	 */
 	err = btf_check_subprog_call(env, subprog, caller->regs);
 	if (err == -EFAULT)
 		return err;
+	/* 这里是针对global function的一些额外检查，比如不能在持锁期间调用等。这里
+	 * 可以看出来，global function实际上要求是比static function要严格的。
+	 *
+	 * 这里对global function，只做了合法性检查，并没有深入global function
+	 * 做进一步的检查，这也是global的独特之处。
+	 */
 	if (subprog_is_global(env, subprog)) {
 		const char *sub_name = subprog_name(env, subprog);
 
@@ -16628,18 +16641,18 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			return -EACCES;
 		}
 
-			/* check dest operand */
-			if ((opcode == BPF_NEG || opcode == BPF_END) &&
-			    regs[insn->dst_reg].type == SCALAR_VALUE) {
-				err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
+		/* check dest operand */
+		if ((opcode == BPF_NEG || opcode == BPF_END) &&
+		    regs[insn->dst_reg].type == SCALAR_VALUE) {
+			err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 			err = err ?: adjust_scalar_min_max_vals(env, insn,
 							 &regs[insn->dst_reg],
 							 regs[insn->dst_reg]);
-			} else {
-				err = check_reg_arg(env, insn->dst_reg, DST_OP);
-			}
-			if (err)
-				return err;
+		} else {
+			err = check_reg_arg(env, insn->dst_reg, DST_OP);
+		}
+		if (err)
+			return err;
 
 	} else if (opcode == BPF_MOV) {
 		/* 看样子MOV指令属于ALU类型的指令？它的作用是将立即数，或者是寄存器
@@ -16828,7 +16841,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			}
 		}
 
-		/* ALU运算都会读取dst_reg，因此这里先对dst_reg进行读取检查 */
+		/* 这里来的ALU运算都会读取dst_reg，因此这里先对dst_reg进行读取检查 */
 		err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 		if (err)
 			return err;
@@ -18922,6 +18935,13 @@ static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 			lowest_off = min(lowest_off, insn->off);
 		}
 		/* use this offset to find fastcall patterns */
+		/* 遍历所有的call helper和call kfunc，对call_summary进行初始化
+		 * （当前函数是否是fastcall，参数个数，是否有返回值等）。
+		 *
+		 * 随后，它会针对这个指令，进行匹配模式的查找（查找+-1,+-2处的指令是否
+		 * 是符合fastcall模式的spill/fill指令）。这里需要注意，spill/fill
+		 * 必须使用当前函数栈帧的栈顶（即lowest_off）进行spill/fill。
+		 */
 		for (i = subprog->start; i < (subprog + 1)->start; ++i) {
 			insn = env->prog->insnsi + i;
 			if (insn->code != (BPF_JMP | BPF_CALL))
@@ -19503,6 +19523,13 @@ static int check_btf_func_early(struct bpf_verifier_env *env,
 	bpfptr_t urecord;
 	int ret = -ENOMEM;
 
+	/* 这里是解析BPF程序里面的函数信息的。编译器会将BPF程序所使用到的函数的BTF
+	 * 信息都保存到特定的段里面，libbpf会进行解析。其中，bpf_func_info代表的
+	 * 就是一个函数，分别保存了函数指令的偏移和对应的BTF ID。
+	 *
+	 * 这里是将这个信息从用户态拷贝到内核态，然后做一些合法性检查，比如对应的BTF
+	 * 必须是函数。
+	 */
 	nfuncs = attr->func_info_cnt;
 	if (!nfuncs) {
 		if (check_abnormal_return(env))
@@ -19932,6 +19959,8 @@ static int check_btf_info(struct bpf_verifier_env *env,
 
 	/* 根据用户态传递过来的CORE信息，进行指令的CORE。这个应该是别的用途的，真正
 	 * 的CORE在用户态的时候就已经完成了的。
+	 *
+	 * 看起来这里是兜底作用的，提供一种在内核态也能进行CORE的方式。
 	 */
 	err = check_core_relo(env, attr, uattr);
 	if (err)
@@ -21654,6 +21683,7 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		insn = &insns[env->insn_idx];
+		/* 每条指令都会有一个和它对应的元数据信息，将它取出来。 */
 		insn_aux = &env->insn_aux_data[env->insn_idx];
 
 		if (++env->insn_processed > BPF_COMPLEXITY_LIMIT_INSNS) {
@@ -21694,7 +21724,7 @@ static int do_check(struct bpf_verifier_env *env)
 				return err;
 		}
 
-		/* 检查当前是否有信号需要处理，已经是否需要进行调度 */
+		/* 检查当前是否有信号需要处理，以及是否需要进行调度 */
 		if (signal_pending(current))
 			return -EAGAIN;
 
@@ -21732,22 +21762,39 @@ static int do_check(struct bpf_verifier_env *env)
 				return err;
 		}
 
-			sanitize_mark_insn_seen(env);
-			prev_insn_idx = env->insn_idx;
+		sanitize_mark_insn_seen(env);
+		prev_insn_idx = env->insn_idx;
 
-			/* 遇到 nospec 边界时，提前结束当前 speculative 路径。 */
-			if (state->speculative && insn_aux->nospec)
-				goto process_bpf_exit;
+		/* 这里检查当前的指令（branch）是否是推测的，以及当前指令是否不允许
+		 * 推测执行。如果是的话，就直接结束当前branch的检查。
+		 *
+		 * 推测执行：在do_check_insn -> check_cond_jmp_op中，如果检查
+		 * 到条件跳转指令，且根据寄存器的状态推断出来了是可预测的（一条
+		 * branch必定为false），那么如果当前的环境（用户权限）不允许
+		 * bypass_spec，那么就会将这个注定为false的branch压入到branch栈
+		 * 中，只不过将其状态标记为speculative。
+		 *
+		 * 针对speculative分支的检查，它不是必须的。如果检查过程中出现了
+		 * 错误，就会把这个发生错误的指令标记为nospec。下次再遇到这个被
+		 * 标记的指令，就直接结束当前branch的检查。
+		 *
+		 * 这里可以看出来，对于condition校验为false的情况，是允许非法指令
+		 * 存在的。这里采用推测检查的方式，可能是为了其他的原因（比如有依赖
+		 * 什么的）。
+		 */
+		if (state->speculative && insn_aux->nospec)
+			goto process_bpf_exit;
 
-			err = bpf_reset_stack_write_marks(env, env->insn_idx);
-			if (err)
-				return err;
-			err = do_check_insn(env, &do_print_state);
-			if (err >= 0 || error_recoverable_with_nospec(err)) {
-				marks_err = bpf_commit_stack_write_marks(env);
-				if (marks_err)
-					return marks_err;
-			}
+		err = bpf_reset_stack_write_marks(env, env->insn_idx);
+		if (err)
+			return err;
+		/* 正式进入到BPF指令检查的逻辑。 */
+		err = do_check_insn(env, &do_print_state);
+		if (err >= 0 || error_recoverable_with_nospec(err)) {
+			marks_err = bpf_commit_stack_write_marks(env);
+			if (marks_err)
+				return marks_err;
+		}
 		if (error_recoverable_with_nospec(err) && state->speculative) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
@@ -25030,6 +25077,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->speculative = false;
 	state->branches = 1;
 	state->in_sleepable = env->prog->sleepable;
+	/* 分配当前要检查的程序/子程序的第一层栈帧。 */
 	state->frame[0] = kzalloc_obj(struct bpf_func_state, GFP_KERNEL_ACCOUNT);
 	if (!state->frame[0]) {
 		kfree(state);
@@ -25046,6 +25094,10 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	regs = state->frame[state->curframe]->regs;
 	/* 这里可以看出来，TYPE_EXT可以当做subprog来对待，因为它本身就是用来代替
 	 * subprog的。
+	 *
+	 * 下面的代码是做一些参数寄存器方面的初始化工作。对于main prog，会将reg1
+	 * 的状态初始化为PTR_TO_CTX；对于subprog，会解析subprog的函数原型（通过BTF）。
+	 * 
 	 */
 	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
 		const char *sub_name = subprog_name(env, subprog);
@@ -25054,6 +25106,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 		if (env->log.level & BPF_LOG_LEVEL)
 			verbose(env, "Validating %s() func#%d...\n", sub_name, subprog);
+		/* 解析子程序参数类型，这里依赖子程序的 BTF 信息。 */
 		ret = btf_prepare_func_args(env, subprog);
 		if (ret)
 			goto out;
@@ -25079,6 +25132,11 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 				goto out;
 			}
 		}
+		/* 如果当前是子程序，那么对子程序的参数类型进行检查和设置。因为在进行
+		 * 子程序的调用检查的时候，我们就已经检查过了子程序的参数类型和寄存器
+		 * 的匹配性，因此这里就是为每个参数设置对应的寄存器状态，相当于伪造
+		 * 一下。
+		 */
 		for (i = BPF_REG_1; i <= sub->arg_cnt; i++) {
 			arg = &sub->args[i - BPF_REG_1];
 			reg = &regs[i];
@@ -25123,6 +25181,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			}
 		}
 	} else {
+		/* 对于main program，这里就简单的把reg1类型设置为ctx，这个是标准操作。 */
 		/* if main BPF program has associated BTF info, validate that
 		 * it's matching expected signature, and otherwise mark BTF
 		 * info for main program as unreliable
@@ -25189,6 +25248,10 @@ static int do_check_subprogs(struct bpf_verifier_env *env)
 again:
 	new_cnt = 0;
 	for (i = 1; i < env->subprog_cnt; i++) {
+		/* 这里只处理global函数。这里可以看出来，对于global类型的函数，
+		 * 即使调用了多次，其复杂度也只会按照一次来进行计算的。这在一些
+		 * 递归代码中，能有效的降低BPF程序的验证复杂度。
+		 */
 		if (!subprog_is_global(env, i))
 			continue;
 
@@ -25690,6 +25753,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		break;
 	case BPF_TRACE_ITER:
+		/* iter的目标是一个内核函数。在这之后，还会在bpf_iter_prog_supported
+		 * 进一步检查，目标函数必须是bpf_iter_开头的。
+		 */
 		if (!btf_type_is_func(t)) {
 			bpf_log(log, "attach_btf_id %u is not a function\n",
 				btf_id);
@@ -25734,6 +25800,11 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		     prog->aux->saved_dst_attach_type != tgt_prog->expected_attach_type))
 			return -EINVAL;
 
+		/* 这里是attach_func_proto唯一可能为NULL的地方。两个条件：首先是
+		 * bpf2bpf类型的，即必须要指定tgt_prog；其次，目标函数是不可靠的。
+		 * 这种情况下，好像是就不解析目标函数，而是采取保守模式，即只解析
+		 * 5个寄存器参数。
+		 */
 		if (tgt_prog && conservative)
 			t = NULL;
 
@@ -26651,6 +26722,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* 进行fastcall的标记。 */
 	ret = mark_fastcall_patterns(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -26659,6 +26731,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	 * prog进行检查，然后对subprog进行检查。
 	 */
 	ret = do_check_main(env);
+	/* 这里是检查global subprog的地方，上面的检查不会深入global func进行检查 */
 	ret = ret ?: do_check_subprogs(env);
 
 	if (ret == 0 && bpf_prog_is_offloaded(env->prog->aux))

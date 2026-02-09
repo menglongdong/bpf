@@ -6809,11 +6809,16 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			tname, off);
 		return false;
 	}
-	/* 计算出当前访问的是第几个参数 */
+	/* 计算出当前访问的是第几个参数。如果t为NULL，那么就按照所有的参数长度都是8
+	 * 来计算。
+	 */
 	arg = btf_ctx_arg_idx(btf, t, off);
 	/* args指向函数/tracepoint参数数组 */
 	args = (const struct btf_param *)(t + 1);
-	/* 获取目标函数的参数个数 */
+	/* 获取目标函数的参数个数。t为NULL，就检查MAX_BPF_FUNC_REG_ARGS个参数。
+	 * 这个是针对bpf2bpf的情况的，目标函数不可靠的场景。这种情况下，是不会对
+	 * 函数的参数进行严格的检查的。
+	 */
 	nr_args = t ? btf_type_vlen(t) : MAX_BPF_FUNC_REG_ARGS;
 
 	/* 如果当前的类型是raw_tp，那么跳过目标函数的第一个参数，因为目标函数（比如
@@ -7846,7 +7851,8 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	const char *tname;
 
 	/* 进行subprog函数的解析，包括解析函数所有的参数以及返回值信息，函数参数
-	 * 中的tag信息等，并将其保存到检查器的subprog中。
+	 * 中的tag信息等，并将其保存到检查器的subprog中。这里只针对当前的子程序
+	 * 存在btf_id的情况做检查。
 	 */
 
 	if (sub->args_cached)

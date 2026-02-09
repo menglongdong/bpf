@@ -2530,6 +2530,7 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 	    bpf_prog_has_kfunc_call(fp))
 		jit_needed = true;
 
+	/* 按运行模式选择解释器；若不可用则强制需要 JIT。 */
 	if (!bpf_prog_select_interpreter(fp))
 		jit_needed = true;
 
