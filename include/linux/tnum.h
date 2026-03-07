@@ -13,7 +13,10 @@
 
 struct tnum {
 	u64 value;
-	/* mask为0代表是个常量；mask为-1，代表是unknow的 */
+	/* mask为0代表是个常量；mask为-1，代表是unknow的。这里的mask标记的是当前
+	 * 未知的位。也就是说，如果mask为0,代表当前数字是个常量（已知），其常量值
+	 * 就是value。
+	 */
 	u64 mask;
 };
 

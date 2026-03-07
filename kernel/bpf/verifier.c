@@ -285,7 +285,9 @@ struct bpf_call_arg_meta {
 	bool raw_mode;
 	bool pkt_access;
 	u8 release_regno;
+	/* 和下面的那个access_size配合使用的 */
 	int regno;
+	/* 针对uninited_mem的，详见check_stack_range_initialized()函数 */
 	int access_size;
 	int mem_size;
 	u64 msize_max_value;
@@ -5602,15 +5604,31 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 	int insn_flags = insn_stack_access_flags(reg_state->frameno, spi);
 	int err;
 
+	/* 根据偏移，找到对应的stack slot，从中取出对应的状态信息。 */
 	stype = reg_state->stack[spi].slot_type;
 	reg = &reg_state->stack[spi].spilled_ptr;
 
+	/* 标记stack slot被访问过。这里是用一个u64来记录的，每个slot对应其中的一个
+	 * bit，这样可以覆盖64 * 8 = 512字节的栈空间，也就是整个BPF栈的大小。
+	 */
 	mark_stack_slot_scratched(env, spi);
+	/* 如果当前指令不是fastcall，但是fastcall的栈里的数据被访问了，那么就
+	 * 取消fastcall重写，回退到普通模式。
+	 */
 	check_fastcall_stack_contract(env, state, env->insn_idx, off);
+	/* 将当前slot标记为已读（涉及到liveness，暂时还没搞明白） */
 	err = bpf_mark_stack_read(env, reg_state->frameno, env->insn_idx, BIT(spi));
 	if (err)
 		return err;
 
+	/* 检查当前要读取的slot是不是soilled过的。所谓的spill，就是在写栈中的数据的
+	 * 时候，将寄存器中的一些元数据也保存下来，下次读取的时候，就能恢复寄存器的
+	 * 状态。比如，我们将一个变量a保存到栈中，变量a已经被track到了一定的范围，
+	 * 那么下次我们将其从栈中读取出来的时候，还能恢复这个信息。
+	 *
+	 * 这个spilled的信息也是保存在stack slot中的，上面的变量reg就是根据slot
+	 * 来拿到的这个信息。
+	 */
 	if (is_spilled_reg(&reg_state->stack[spi])) {
 		u8 spill_size = 1;
 
@@ -5768,6 +5786,10 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env,
 
 	/* Note that we pass a NULL meta, so raw access will not be permitted.
 	 */
+	/* 首先根据源寄存器（ptr_regno）的状态，检查可能要读取的内存是否都初始化了。
+	 * 由于偏移是不固定的，因此这里会使用tnum的范围来进行检查，即检查tnum范围
+	 * 内对应的内存是否全部都初始化了。
+	 */
 	err = check_stack_range_initialized(env, ptr_regno, off, size,
 					    false, BPF_READ, NULL);
 	if (err)
@@ -5803,9 +5825,16 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	 * 目的寄存器。这里会根据读取的偏移是否是常量来进行不同的检查。
 	 */
 
-	/* The offset is required to be static when reads don't go to a
-	 * register, in order to not leak pointers (see
-	 * check_stack_read_fixed_off).
+	/* 在进行内存读取的时候，这里会分为两种情况：偏移固定和偏移不固定。偏移固定
+	 * 很好理解：
+	 *     int a = 100;
+	 *     int b = ctx[a];
+	 * 偏移不固定就类似这种：
+	 *     int a = bpf_get_prandom_u32() % 10;
+	 *     int b = ctx[a];
+	 *
+	 * 在某些情况下（比如helper调用），不允许使用偏移不固定的方式进行访问，
+	 * 因为这可能会导致安全问题。
 	 */
 	if (dst_regno < 0 && var_off) {
 		char tn_buf[48];
@@ -5824,6 +5853,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	 * just checking it here would be insufficient as speculative stack
 	 * writes could still lead to unsafe speculative behaviour.
 	 */
+	/* 根据偏移是否固定，分别进行不同的检查。 */
 	if (!var_off) {
 		off += reg->var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
@@ -7829,7 +7859,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			return -EACCES;
 		}
 
-		/* 检查内存访问边界。 */
+		/* 检查内存访问边界，看这个函数的注释 */
 		err = check_mem_region_access(env, regno, off, size,
 					      reg->map_ptr->key_size, false);
 		if (err)
@@ -7878,11 +7908,11 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		} else if (t == BPF_READ && value_regno >= 0) {
 			struct bpf_map *map = reg->map_ptr;
 
-				/*
-				 * If map is read-only, track its contents as scalars,
-				 * unless it is an insn array (see the special case below).
-				 */
-				if (tnum_is_const(reg->var_off) &&
+			/*
+			 * If map is read-only, track its contents as scalars,
+			 * unless it is an insn array (see the special case below).
+			 */
+			if (tnum_is_const(reg->var_off) &&
 			    bpf_map_is_rdonly(map) &&
 			    map->ops->map_direct_value_addr &&
 			    map->map_type != BPF_MAP_TYPE_INSN_ARRAY) {
@@ -8158,6 +8188,8 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * 或者BPF_MEMSX，没有其他的可能，这个在
 	 *   bpf_check -> resolve_pseudo_ldimm64 中已经做了合法性
 	 * 检查。
+	 *
+	 * BPF_MEM: 将指定内存加载到寄存器（无符号），相对于BPF_MEMSX有符号
 	 */
 	err = check_mem_access(env, env->insn_idx, insn->src_reg, insn->off,
 			       BPF_SIZE(insn->code), BPF_READ, insn->dst_reg,
@@ -8388,11 +8420,13 @@ static int check_stack_range_initialized(
 	if (type == BPF_WRITE)
 		clobber = true;
 
+	/* 检查可能访问的内存有没有超过内存边界，主要看寄存器中的跟踪状态和访问尺寸 */
 	err = check_stack_access_within_bounds(env, regno, off, access_size, type);
 	if (err)
 		return err;
 
 
+	/* 根据跟踪类型来获取内存访问的可能的范围（min-max）。 */
 	if (tnum_is_const(reg->var_off)) {
 		min_off = max_off = reg->var_off.value + off;
 	} else {
@@ -8422,6 +8456,20 @@ static int check_stack_range_initialized(
 		max_off = reg->smax_value + off;
 	}
 
+	/* 对于一些函数（kfunc或者helper），其允许参数（传递进来的内存地址）指向
+	 * 未初始化的内存，这种情况下就会将meta设置上raw_mode标志。但是，这要求
+	 * 这个内存必须是来自栈上的，且地址是固定的（tnum是const）。
+	 *
+	 * 如果不是固定的内存地址，那么这种情况下会忽略这个标志，也就是全部的内存
+	 * 都要是初始化过的。
+	 *
+	 * 一旦允许这种raw_mode模式，那么在check_helper_call里面，会进行内存的
+	 * 模拟访问，即按照1字节的大小来模拟访问所有的access_size。
+	 *
+	 * 下面的代码确保了这种未初始化的内存访问，不会覆盖（影响）到动态指针，也就是
+	 * 说这段内存中不能存在动态指针。这也意味着目前同一个helper是不能同时使用
+	 * 未初始化的内存+动态指针的。
+	 */
 	if (meta && meta->raw_mode) {
 		/* Ensure we won't be overwriting dynptrs when simulating byte
 		 * by byte access in check_helper_call using meta.access_size.
@@ -8448,11 +8496,13 @@ static int check_stack_range_initialized(
 				return -EACCES;
 			}
 		}
+		/* 将这个uninit_mem的信息保存下来，在check_helper_call里面会使用 */
 		meta->access_size = access_size;
 		meta->regno = regno;
 		return 0;
 	}
 
+	/* 遍历可能访问的内存栈中的所有的插槽，检查可能的非法行为。 */
 	for (i = min_off; i < max_off + access_size; i++) {
 		u8 *stype;
 
@@ -8466,6 +8516,7 @@ static int check_stack_range_initialized(
 		stype = &state->stack[spi].slot_type[slot % BPF_REG_SIZE];
 		if (*stype == STACK_MISC)
 			goto mark;
+		/* 如果栈数据没有初始化，并且没有足够的权限，那么就不允许进行读取操作。 */
 		if ((*stype == STACK_ZERO) ||
 		    (*stype == STACK_INVALID && env->allow_uninit_stack)) {
 			if (clobber) {
@@ -8475,6 +8526,13 @@ static int check_stack_range_initialized(
 			goto mark;
 		}
 
+		/* 允许指针泄露。正常情况下，如果将一个指针保存到了栈里面，下次读取的时候会
+		 * 进行unspill。但是如果读取的时候，地址是不固定的，那么就不能确定读的具体
+		 * 地址，没法进行unspill。这个时候，如果允许ptr leaks，那么就允许读这个内存。
+		 * 有权限就行。
+		 *
+		 * 如果是写操作的话，那么就将这个spill信息给清除掉。
+		 */
 		if (is_spilled_reg(&state->stack[spi]) &&
 		    (state->stack[spi].spilled_ptr.type == SCALAR_VALUE ||
 		     env->allow_ptr_leaks)) {
@@ -10056,9 +10114,13 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	u32 key_size;
 	int err = 0;
 
+	/* 默认的参数类型，因此对于不存在的参数，这里会直接忽略掉 */
 	if (arg_type == ARG_DONTCARE)
 		return 0;
 
+	/* 因为当前的寄存器作为函数的参数，因此其需要被读，这里将其作为SRC_OP（源操作数）
+	 * 进行检查。
+	 */
 	err = check_reg_arg(env, regno, SRC_OP);
 	if (err)
 		return err;
@@ -10106,6 +10168,10 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	if (err)
 		return err;
 
+	/* 对比当前寄存器中的信息和当前函数参数的要求，做偏移检查。有些类型的数据，
+	 * 是不允许非固定偏移访问的，而有些是不能传递偏移给helper的（比如参数
+	 * 是需要被release的资源，像bpf_sk_release函数）。
+	 */
 	err = check_func_arg_reg_off(env, reg, regno, arg_type);
 	if (err)
 		return err;
@@ -11109,6 +11175,8 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 *
 	 * 这里对global function，只做了合法性检查，并没有深入global function
 	 * 做进一步的检查，这也是global的独特之处。
+	 *
+	 * 这里可以看出来，对于global subprog，不会进入到函数进行检查。
 	 */
 	if (subprog_is_global(env, subprog)) {
 		const char *sub_name = subprog_name(env, subprog);
@@ -11156,13 +11224,20 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	/* for regular function entry setup new frame and continue
 	 * from that frame.
 	 */
+	/* 分配并初始化新的栈帧，将当前栈帧更新为新的栈帧。这里在初始化的时候，会将
+	 * 1-5传参寄存器的状态直接拷贝进去，实现函数传参的效果（set_callee_state
+	 * 实现的）。
+	 */
 	err = setup_func_entry(env, subprog, *insn_idx, set_callee_state, state);
 	if (err)
 		return err;
 
+	/* 和helper一样，在函数调用完成后，将caller saved寄存器的状态设置为未初始化 */
 	clear_caller_saved_regs(env, caller->regs);
 
-	/* and go analyze first insn of the callee */
+	/* 将下一条要分析的指令的索引设置为被call的函数的第一条指令。这里可以看出来，
+	 * 对于static subprog，会直接进入到函数进行检查。
+	 */
 	*insn_idx = env->subprog_info[subprog].start - 1;
 
 	bpf_reset_live_stack_callchain(env);
@@ -11874,6 +11949,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	/* find function prototype */
 	func_id = insn->imm;
+	/* 根据函数的ID来查找对应的函数原型。这里查找的时候会调用当前BPF类型的钩子
+	 * 函数进行查找，因此不同的BPF程序看到的helper函数可能不同，甚至同一个
+	 * 函数ID在不同的BPF程序中对应的函数原型也可能不同。
+	 */
 	err = get_helper_proto(env, insn->imm, &fn);
 	if (err == -ERANGE) {
 		verbose(env, "invalid func %s#%d\n", func_id_name(func_id), func_id);
@@ -11892,17 +11971,21 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return -EINVAL;
 	}
 
+	/* helper上的钩子函数，可以更具体地检查当前的prog能否使用这个helper */
 	if (fn->allowed && !fn->allowed(env->prog)) {
 		verbose(env, "helper call is not allowed in probe\n");
 		return -EINVAL;
 	}
 
+	/* 非sleepable的BPF程序不能调用sleepable的bpf helper */
 	if (!in_sleepable(env) && fn->might_sleep) {
 		verbose(env, "helper call might sleep in a non-sleepable prog\n");
 		return -EINVAL;
 	}
 
-	/* With LD_ABS/IND some JITs save/restore skb from r1. */
+	/* 有些bpf helper会修改数据包，在调用完后需要重新读取和比较报文的地址，
+	 * 后面会用clear_all_pkt_pointers来清空所有的已经保存的报文指针信息。
+	 */
 	changes_data = bpf_helper_changes_pkt_data(func_id);
 	if (changes_data && fn->arg1_type != ARG_PTR_TO_CTX) {
 		verifier_bug(env, "func %s#%d: r1 != ctx", func_id_name(func_id), func_id);
@@ -11912,12 +11995,16 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	memset(&meta, 0, sizeof(meta));
 	meta.pkt_access = fn->pkt_access;
 
+	/* 对bpf helper本身的合法性进行检查？没必要在这里啊，完全可以在init里面检查
+	 * 完把结果直接放到bpf_func_proto里，直接用就行了。
+	 */
 	err = check_func_proto(fn);
 	if (err) {
 		verifier_bug(env, "incorrect func proto %s#%d", func_id_name(func_id), func_id);
 		return err;
 	}
 
+	/* 一些状态信息，包括在rcu持锁期间或者preempt disable期间，不能调用sleepable的函数 */
 	if (env->cur_state->active_rcu_locks) {
 		if (fn->might_sleep) {
 			verbose(env, "sleepable helper %s#%d in rcu_read_lock region\n",
@@ -11969,6 +12056,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	/* Mark slots with STACK_MISC in case of raw mode, stack offset
 	 * is inferred from register state.
 	 */
+	/* 这个是针对uninited_mem的，详情可以参考check_stack_range_initialized的
+	 * 相关实现。在check_stack_range_initialized这个函数里面，如果某个
+	 * helper函数的参数被设置了MEM_UNINIT标志，那么就会将这个参数对应的寄存器
+	 * 和访问大小记录下来，在这里模拟byte-by-byte是写访问。通过这种方式，来
+	 * 模拟对内存栈的初始化。
+	 */
 	for (i = 0; i < meta.access_size; i++) {
 		err = check_mem_access(env, insn_idx, meta.regno, i, BPF_B,
 				       BPF_WRITE, -1, false, false);
@@ -11978,6 +12071,13 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	regs = cur_regs(env);
 
+	/* 如果某个函数参数被设置了OBJ_RELEASE的标志，代表着传递给这个函数的这个
+	 * 参数的变量会被释放掉（不能再被使用），比如bpf_ringbuf_submit，调用完
+	 * 之后就不能再访问ringbuf数据了。
+	 *
+	 * 这个存放着被释放掉的对象的寄存器的编号在check_func_arg中会被设置。这里
+	 * 是针对这种case的特殊处理。
+	 */
 	if (meta.release_regno) {
 		err = -EINVAL;
 		if (arg_type_is_dynptr(fn->arg_type[meta.release_regno - BPF_REG_1])) {
@@ -12017,6 +12117,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
+	/* 针对每个helper的一些特殊的情况，做case by case的特殊处理。 */
 	switch (func_id) {
 	case BPF_FUNC_tail_call:
 		err = check_resource_leak(env, false, true, "tail_call");
@@ -12169,18 +12270,28 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return err;
 
 	/* reset caller saved regs */
+	/* 根据BPF的约定，CALLER_SAVED_REGS这些寄存器是可以随意破坏的（x86_64也是这样），
+	 * 也就意味着在经过函数调用后，这些寄存器的状态是未知的，这里要将其进行标记为
+	 * 未初始化的状态。
+	 */
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
 		mark_reg_not_init(env, regs, caller_saved[i]);
 		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
 	}
 
 	/* helper call returns 64-bit value. */
+	/* 设置reg0（返回值寄存器）的状态，这里是可预知的，因为bpf helper总是返回
+	 * u64.
+	 */
 	regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
 
 	/* update return register (already marked as written above) */
 	ret_type = fn->ret_type;
 	ret_flag = type_flag(ret_type);
 
+	/* 根据helper函数的原数据中的返回值信息，来更新返回值寄存器的状态，这里
+	 * 也是case by case来处理的。
+	 */
 	switch (base_type(ret_type)) {
 	case RET_INTEGER:
 		/* sets type to SCALAR_VALUE */
@@ -12320,9 +12431,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return -EFAULT;
 	}
 
+	/* 当前函数如果是bpf_dynptr_data()，那么就更新动态指针的id到返回值寄存器。 */
 	if (is_dynptr_ref_function(func_id))
 		regs[BPF_REG_0].dynptr_id = meta.dynptr_id;
 
+	/* 这里是用来处理关于acquire和release逻辑的。 */
 	if (is_ptr_cast_function(func_id) || is_dynptr_ref_function(func_id)) {
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
@@ -12337,14 +12450,22 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		regs[BPF_REG_0].ref_obj_id = id;
 	}
 
+	/* case by case地重置一下返回值为int类型的返回值范围，比如对于get_smp_processor_id，
+	 * 返回值的范围应该是0-nr_cpus。
+	 */
 	err = do_refine_retval_range(env, regs, fn->ret_type, func_id, &meta);
 	if (err)
 		return err;
 
+	/* 这里是检查对于map类访问的helper，当前的helper和map是否是兼容的。对于
+	 * prog，会根据prog类型来检查当前helper是否可用，但是并没有一个现成的机制
+	 * 来检查哪种map可以使用哪些helper，所以这里只能case by case的来检查。
+	 */
 	err = check_map_func_compatibility(env, meta.map.ptr, func_id);
 	if (err)
 		return err;
 
+	/* 又是一些特殊情况的处理 */
 	if ((func_id == BPF_FUNC_get_stack ||
 	     func_id == BPF_FUNC_get_task_stack) &&
 	    !env->prog->has_callchain_buf) {
@@ -12393,6 +12514,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 	}
 
+	/* 和上面的对应，某些helper函数在调用完后，需要重新获取网络报文数据。 */
 	if (changes_data)
 		clear_all_pkt_pointers(env);
 	return 0;
@@ -14354,6 +14476,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm)
 		return 0;
 
+	/* 根据kfunc的btf id，来抓取kfunc对应的原数据信息 */
 	err = fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
 	if (err == -EACCES && meta.func_name)
 		verbose(env, "calling kernel function %s is not allowed\n", meta.func_name);
@@ -14395,6 +14518,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
+	/* 有KF_DESTRUCTIVE标志的kfunc需要root权限才行 */
 	if (is_kfunc_destructive(&meta) && !capable(CAP_SYS_BOOT)) {
 		verbose(env, "destructive kfunc calls require CAP_SYS_BOOT capability\n");
 		return -EACCES;
@@ -14410,11 +14534,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!in_sleepable_context(env))
 		insn_aux->non_sleepable = true;
 
-	/* Check the arguments */
+	/* 遍历当前kfunc中的所有的函数参数，针对每种kfunc参数类型（如KF_ARG_PTR_TO_CTX）
+	 * 做具体的检查，包括和当前的实参（寄存器中的信息）做合法性对比校验。
+	 */
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
 
+	/* 一些特殊情况的处理 */
 	if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_rbtree_add_callback_state);
@@ -14450,6 +14577,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
+	/* 对于rcu_lock和preempt_disable的kfunc的调用，在进行加锁和解锁的时候，分别
+	 * 更新当前栈帧检查器的状态。
+	 */
 	rcu_lock = is_kfunc_bpf_rcu_read_lock(&meta);
 	rcu_unlock = is_kfunc_bpf_rcu_read_unlock(&meta);
 
@@ -14514,6 +14644,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	/* In case of release function, we get register number of refcounted
 	 * PTR_TO_BTF_ID in bpf_kfunc_arg_meta, do the release now.
 	 */
+	/* 对于设置了KF_RELEASE标志的kfunc（如bpf_put_file），在前面检查参数的
+	 * 时候会设置对应的寄存器索引（和helper基本上一个原理）。
+	 */
 	if (meta.release_regno) {
 		struct bpf_reg_state *reg = &regs[meta.release_regno];
 
@@ -14529,6 +14662,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 	}
 
+	/* 特殊情况的处理 */
 	if (meta.func_id == special_kfunc_list[KF_bpf_list_push_front_impl] ||
 	    meta.func_id == special_kfunc_list[KF_bpf_list_push_back_impl] ||
 	    meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
@@ -14568,6 +14702,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
+	/* 和前面的类似，在函数调用完成后，将caller saved寄存器的状态进行清理，
+	 * 使其达到未初始化的状态。
+	 */
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
 		u32 regno = caller_saved[i];
 
@@ -14575,7 +14712,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		regs[regno].subreg_def = DEF_NOT_SUBREG;
 	}
 
-	/* Check return type */
+	/* 获取到这个kfunc的返回值类型（跳过了修饰，比如const这种）。然后根据类型
+	 * 来设置reg0的状态。这里会处理int/enmu、指针（btf type）和void三种情况。
+	 */
 	t = btf_type_skip_modifiers(desc_btf, meta.func_proto->type, NULL);
 
 	if (is_kfunc_acquire(&meta) && !btf_type_is_struct_ptr(meta.btf, t)) {
@@ -14704,9 +14843,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
+	/* 看起来kfunc也能修改报文数据，比如bpf_xdp_pull_data，逻辑和helper中的一致 */
 	if (is_kfunc_pkt_changing(&meta))
 		clear_all_pkt_pointers(env);
 
+	/* 遍历函数参数，根据参数类型设置寄存器的尺寸 */
 	nargs = btf_type_vlen(meta.func_proto);
 	args = (const struct btf_param *)(meta.func_proto + 1);
 	for (i = 0; i < nargs; i++) {
@@ -15325,6 +15466,7 @@ static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
 	u32 umax_val = src_reg->u32_max_value;
 	bool min_overflow, max_overflow;
 
+	/* dst_smin += src_reg->s32_min_value。如果溢出了，就将边界标记为未知 */
 	if (check_add_overflow(*dst_smin, src_reg->s32_min_value, dst_smin) ||
 	    check_add_overflow(*dst_smax, src_reg->s32_max_value, dst_smax)) {
 		*dst_smin = S32_MIN;
@@ -16266,6 +16408,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 * 不一致，会失败的。
 	 */
 	if (sanitize_needed(opcode)) {
+		/* 在推测分支上检查通过的指令，才需要进行消毒。 */
 		ret = sanitize_val_alu(env, insn);
 		if (ret < 0)
 			return sanitize_err(env, insn, ret, NULL, NULL);
@@ -16644,6 +16787,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		/* check dest operand */
 		if ((opcode == BPF_NEG || opcode == BPF_END) &&
 		    regs[insn->dst_reg].type == SCALAR_VALUE) {
+			/* 检查dst_reg（不将其标记为unknow），然后对dst_reg的bound
+			 * 进行更新。
+			 */
 			err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 			err = err ?: adjust_scalar_min_max_vals(env, insn,
 							 &regs[insn->dst_reg],
@@ -16668,6 +16814,9 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					return -EINVAL;
 				}
 			} else if (insn->off == BPF_ADDR_SPACE_CAST) {
+				/* 用于标识这个地址是属于arena的空间的地址，需要编译器支持，
+				 * 具体参考bpf_addr_space_cast()的使用。
+				 */
 				if (insn->imm != 1 && insn->imm != 1u << 16) {
 					verbose(env, "addr_space_cast insn can only convert between address space 1 and 0\n");
 					return -EINVAL;
@@ -17557,6 +17706,25 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	if (BPF_CLASS(insn->code) == BPF_JMP32)
 		return false;
 
+	/* 根据各种对比条件来找出pkt valid的branch，然后做一定的标记。这里的标记
+	 * 有2种：更新对应的寄存器的range为AT_PKT_END或者BEYOND_PKT_END。
+	 *
+	 * AT_PKT_END：表示寄存器的可访问最大值等于pkt_end，也就是指向包的结尾了；
+	 * BEYOND_PKT_END：表示寄存器的可访问最大值大于pkt_end，也就是指向包的
+	 * 结尾之外了（至少比pkt_end大1个字节）。
+	 *
+	 * 后面再读取这个寄存器地址的内容的时候，就会使用AT_PKT_END作为有效的range
+	 * 来进行内存合法性检查。可以看出来，对于网络报文数据的访问，是直接将true
+	 * 分支的寄存器进行标记来识别有效性的。
+	 *
+	 * 这里不仅会更新当前寄存器的状态，还会更新所有的关联（id一致）寄存器的状态，
+	 * 将其range更新为较大值。比如：
+	 *   c = range(0, 100);
+	 *   a = pkt + c;
+	 *   if (a < pkt_end)
+	 *     // 在这个路径里面，会更新和a有关联的寄存器的range为100
+	 *     // 同时，在这个路径里面会将寄存器a的range标记为AT_PKT_END
+	 */
 	switch (BPF_OP(insn->code)) {
 	case BPF_JGT:
 		if ((dst_reg->type == PTR_TO_PACKET &&
@@ -17917,11 +18085,11 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
-		/* pred为0或1时不会分叉；到这里表示需要压栈另一条分支。 */
-		other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
-		if (IS_ERR(other_branch))
-			return PTR_ERR(other_branch);
-		other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
+	/* pred为0或1时不会分叉；到这里表示需要压栈另一条分支。 */
+	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
+	if (IS_ERR(other_branch))
+		return PTR_ERR(other_branch);
+	other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
 
 	/* 根据比较的逻辑来进一步推断（设置）寄存器的范围。例如：
 	 *   if (a > 100)
@@ -21551,6 +21719,9 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 		env->jmps_processed++;
 		if (opcode == BPF_CALL) {
+			/* 进行合法性检查，BPF不支持间接函数调用，因此模式一定是立即数。
+			 * 它会将一些信息保存到未使用的字段，比如调用类型放到src_reg
+			 * 里面。			 */
 			if (BPF_SRC(insn->code) != BPF_K ||
 			    (insn->src_reg != BPF_PSEUDO_KFUNC_CALL &&
 			     insn->off != 0) ||
@@ -21573,6 +21744,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 					return -EINVAL;
 				}
 			}
+			/* 根据调用类型分别执行对应的检查逻辑。 */
 			if (insn->src_reg == BPF_PSEUDO_CALL) {
 				err = check_func_call(env, insn, &env->insn_idx);
 			} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
@@ -21587,6 +21759,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 			mark_reg_scratched(env, BPF_REG_0);
 		} else if (opcode == BPF_JA) {
+			/* 绝对地址跳转（goto xxx或者goto dst_reg）。 */
 			if (BPF_SRC(insn->code) == BPF_X) {
 				if (insn->src_reg != BPF_REG_0 ||
 				    insn->imm != 0 || insn->off != 0) {
@@ -26601,6 +26774,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 
 	/* 对BPF的访问权限进行初始化 */
 	env->allow_ptr_leaks = bpf_allow_ptr_leaks(env->prog->aux->token);
+	/* 看起来有权限的话，是允许读未初始化的栈空间的。 */
 	env->allow_uninit_stack = bpf_allow_uninit_stack(env->prog->aux->token);
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);
 	env->bypass_spec_v4 = bpf_bypass_spec_v4(env->prog->aux->token);

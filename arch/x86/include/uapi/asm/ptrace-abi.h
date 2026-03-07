@@ -42,6 +42,9 @@
 /* These regs are callee-clobbered. Always saved on kernel entry. */
 /* 函数在返回的时候不需要恢复这些函数的值，在进行函数调用的时候需要设置好其中一些
  * 寄存器（函数参数）的值。
+ *
+ * 也就是说，在发生函数调用之后，R11、R10、R9、R8、RAX、RCX、RDX、RSI、RDI这些
+ * 寄存器的值都是未知的，这些寄存器在当前函数使用的时候，只能当作临时寄存器来使用。
  */
 #define R11 48
 #define R10 56

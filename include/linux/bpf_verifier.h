@@ -69,6 +69,9 @@ struct bpf_reg_state {
 	s32 delta;
 	union {
 		/* valid when type == PTR_TO_PACKET */
+		/* 专门针对网络报文的，标记着当前报文的有效长度，访问的时候不能超过
+		 * 这个range。
+		 */
 		int range;
 
 		/* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
@@ -818,6 +821,11 @@ struct bpf_verifier_env {
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
 	int exception_callback_subprog;
 	bool explore_alu_limits;
+	/* 允许指针泄露。正常情况下，如果将一个指针保存到了栈里面，下次读取的时候会
+	 * 进行unspill。但是如果读取的时候，地址是不固定的，那么就不能确定读的具体
+	 * 地址，没法进行unspill。这个时候，如果允许ptr leaks，那么就允许读这个内存。
+	 * 有权限就行。
+	 */
 	bool allow_ptr_leaks;
 	/* Allow access to uninitialized stack memory. Writes with fixed offset are
 	 * always allowed, so this refers to reads (with fixed or variable offset),

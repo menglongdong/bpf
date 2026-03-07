@@ -5,7 +5,7 @@
 /* Instruction classes */
 #define BPF_CLASS(code) ((code) & 0x07)
 /* 将内存或者IMM加载到A寄存器（运算寄存器）。看样子，这个是cBPF中才会使用的东西，
- * 仅支持BPF_ABS，BPF_IND喝BPF_IMM三种模式。
+ * 仅支持BPF_ABS，BPF_IND和BPF_IMM三种模式。
  */
 #define		BPF_LD		0x00
 /* 将内存加载到任意的寄存器。看样子，它没有IMM模式，如果是IMM的话就需要使用BPF_LD */

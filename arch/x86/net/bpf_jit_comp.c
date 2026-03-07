@@ -539,6 +539,10 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 		 * callback函数就宛如主程序一样。callback函数在return的时候，就会
 		 * 直接返回到主程序的调用者那里，跳过主程序剩余的代码。
 		 *
+		 * 由于在主程序里面，已经事先将所有的寄存器进行保存，因此即使主程序
+		 * 没有执行完，在exception callback中仍然可以对所有的寄存器进行
+		 * 状态的恢复。
+		 *
 		 * 栈帧布局：
 		 *  +-------------------------------+
 		 *  | main caller stack             |
@@ -567,6 +571,9 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 		 */
 		/* 可以对照do_jit()函数来看，如果是主程序，且调用了bpf_throw()，那么
 		 * 会将这些寄存器在主程序里面进行push操作，保存下来。
+		 *
+		 * BPF约定中，被调用者需要保存（不能破坏）的寄存器r15、r14、r13、r12和rbx。
+		 * 像传参寄存器，被调用者是可以直接将其进行破坏的。
 		 */
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
