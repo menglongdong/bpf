@@ -72,6 +72,10 @@ struct bpf_ringbuf {
 	 * validate each sample to ensure that they're correctly formatted, and
 	 * fully contained within the ring buffer.
 	 */
+	/* 生产者和消费者的position，可以理解为ringbuf的环首和环尾。其中，producer是
+	 * 环首，consumer是环尾；每次生产者会从环首分配新空间，消费者会从环尾进行消费。
+	 * 在最开始的时候，两者都是0。
+	 */
 	unsigned long consumer_pos __aligned(PAGE_SIZE);
 	unsigned long producer_pos __aligned(PAGE_SIZE);
 	unsigned long pending_pos;

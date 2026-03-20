@@ -936,10 +936,10 @@ struct sk_buff {
 	union {
 		/* skb上的时间戳信息。对于发包来说，这个时间戳会在对应的协议层给打上，
 		 * 比如对于TCP协议，就会在__tcp_transmit_skb函数中调用
-		 * skb_set_delivery_time给打上。
+		 * skb_set_delivery_time给打上。这里取的是ktime_get()
 		 * 
 		 * 在收包路径上，这个时间戳根据是否开启了netdev_tstamp_prequeue，
-		 * 会在RPS前/后被初始化为当前时间戳。
+		 * 会在RPS前/后被初始化为当前时间戳。这里取的是ktime_get_real()
 		 */
 		ktime_t		tstamp;
 		u64		skb_mstamp_ns; /* earliest departure time */

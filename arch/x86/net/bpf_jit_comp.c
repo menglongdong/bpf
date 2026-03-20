@@ -1764,6 +1764,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
 
+	/* 将priv_frame_ptr保存到r9寄存器中 */
 	if (priv_frame_ptr)
 		emit_priv_frame_ptr(&prog, priv_frame_ptr);
 
@@ -1787,6 +1788,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		u8 *func;
 		int nops;
 
+		/* 私有栈的情况下，将所有的BPF_REG_FP寄存器替换为R9寄存器，R9
+		 * 中存储着我们的per cpu的私有栈内存。
+		 */
 		if (priv_frame_ptr) {
 			if (src_reg == BPF_REG_FP)
 				src_reg = X86_REG_R9;
@@ -2511,6 +2515,10 @@ populate_extable:
 			}
 			if (!imm32)
 				return -EINVAL;
+			/* 模拟call指令的push rsp操作，将伪造的r9寄存器进行入栈进行保护，
+			 * 以免被破坏。为什么呢？我们明明已经将RSP替换为R9了，
+			 * BPF代码本身不就有对RSP的保护吗？
+			 */
 			if (priv_frame_ptr) {
 				push_r9(&prog);
 				ip += 2;
@@ -2518,6 +2526,7 @@ populate_extable:
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			/* 函数调用完成后，再恢复r9寄存器。 */
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			break;

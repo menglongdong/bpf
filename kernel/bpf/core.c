@@ -392,6 +392,13 @@ static int bpf_adj_branches(struct bpf_prog *prog, u32 pos, s32 end_old,
 	struct bpf_insn *insn = prog->insnsi;
 	int ret = 0;
 
+	/* 遍历当前剩余的所有的指令，找出call和jmp指令。对于call指令，根据call
+	 * 指令当前的index+目标索引，来找出callee的绝对索引，并判断被删除的指令
+	 * 是否在caller和callee之间，是的话就更新insn->imm。
+	 *
+	 * 对于跳转类指令，逻辑也是一样的，判断删除的指令是否在当前指令和目标指令
+	 * 之间，是的话就做调整。
+	 */
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		u8 code;
 
@@ -517,13 +524,12 @@ int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt)
 {
 	int err;
 
-	/* Branch offsets can't overflow when program is shrinking, no need
-	 * to call bpf_adj_branches(..., true) here
-	 */
+	/* 直接将[off, off+cnt)范围内的指令给移除掉 */
 	memmove(prog->insnsi + off, prog->insnsi + off + cnt,
 		sizeof(struct bpf_insn) * (prog->len - off - cnt));
 	prog->len -= cnt;
 
+	/* 对JMP类的指令进行适配（调整） */
 	err = bpf_adj_branches(prog, off, off + cnt, off, false);
 	WARN_ON_ONCE(err);
 	return err;

@@ -7024,6 +7024,7 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 	if (!dinfo)
 		return -ENOMEM;
 
+	/* 如果存在tail call，就不使用私有栈 */
 	for (int i = 0; i < env->subprog_cnt; i++) {
 		if (si[i].has_tail_call) {
 			priv_stack_mode = NO_PRIV_STACK;
@@ -7031,6 +7032,9 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		}
 	}
 
+	/* 为特定的BPF类型使用私有栈，比如TRACING PROG。这些PROG都是运行在自己的
+	 * 栈上的，没有占用内核栈，太牛逼了。
+	 */
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
 
@@ -11530,6 +11534,9 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	if (err)
 		return err;
 
+	/* 检查static call的返回值，这里不允许其返回栈上的指针，即使指针是来自
+	 * caller。这里一种相对保守的做法，理论上是可以返回caller的栈的指针的。
+	 */
 	callee = state->frame[state->curframe];
 	r0 = &callee->regs[BPF_REG_0];
 	if (r0->type == PTR_TO_STACK) {
@@ -11567,13 +11574,18 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			return -EFAULT;
 		}
 	} else {
-		/* return to the caller whatever r0 had in the callee */
+		/* 非callback的情况，这里直接将callee的r0寄存器状态拷贝到上一层
+		 * 栈帧（caller）中的r0寄存器中，从而实现了返回值的效果。
+		 */
 		caller->regs[BPF_REG_0] = *r0;
 	}
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
 	 * there function call logic would reschedule callback visit. If iteration
 	 * converges is_state_visited() would prune that visit eventually.
+	 */
+	/* 对于非callback的场景，这里会将下一条指令设置为那个call指令的下一条指令。
+	 * callback的场景稍微复杂一点，这个后面再看吧。
 	 */
 	in_callback_fn = callee->in_callback_fn;
 	if (in_callback_fn)
@@ -11589,6 +11601,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	}
 	/* clear everything in the callee. In case of exceptional exits using
 	 * bpf_throw, this will be done by copy_verifier_state for extra frames. */
+	/* 释放当前栈帧 */
 	free_func_state(callee);
 	state->frame[state->curframe--] = NULL;
 
@@ -15369,6 +15382,10 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		}
 		dst_reg->var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
 		dst_reg->raw = ptr_reg->raw;
+		/* 如果源寄存器是const（即当前的pkt指针加了个常量），那么不需要做
+		 * 调整；否则，会清空pkt的rang，使其需要重新和skb->data_end做比较。
+		 * 可以理解为这种情况下，两个寄存器就解耦了。
+		 */
 		if (!known && reg_is_pkt_pointer(ptr_reg)) {
 			dst_reg->id = ++env->id_gen;
 			/* something was added to pkt_ptr, set range to zero */
@@ -17301,6 +17318,7 @@ static int is_pkt_ptr_branch_taken(struct bpf_reg_state *dst_reg,
 		return -1;
 	}
 
+	/* 看起来我们不能对skb->data_end取偏移。 */
 	if (pkt->range >= 0)
 		return -1;
 
@@ -17336,9 +17354,17 @@ static int is_pkt_ptr_branch_taken(struct bpf_reg_state *dst_reg,
 static int is_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
 			   u8 opcode, bool is_jmp32)
 {
+	/* 如果是两个报文指针做对比，那么走专门的路径，因为这里会进行报文的有效数据跟踪。
+	 * 需要注意的是，对于网络报文，其branch是可预测的，即永远会取`pkt < skb->data_end`
+	 * 这个代码路径。
+	 */
 	if (reg_is_pkt_pointer_any(reg1) && reg_is_pkt_pointer_any(reg2) && !is_jmp32)
 		return is_pkt_ptr_branch_taken(reg1, reg2, opcode);
 
+	/* 这里是进行空指针检查的预判。如果是将一个指针和NULL做对比，且这个指针
+	 * 当前是可预知的不为NULL，那么就可以判定只走其中一个分支，避免没必要的
+	 * 检查。其他的涉及到指针的条件跳转，都是不可预知的，会直接返回-1. 
+	 */
 	if (__is_pointer_value(false, reg1) || __is_pointer_value(false, reg2)) {
 		u64 val;
 
@@ -17371,7 +17397,9 @@ static int is_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg
 		}
 	}
 
-	/* now deal with two scalars, but not necessarily constants */
+	/* 这里会进行scalar的分支预判，主要是对比两个寄存器的track信息，然后
+	 * 看看是否某个分支是可预知的（即判定条件是否是可预知的必定为true或者false）。
+	 */
 	return is_scalar_branch_taken(reg1, reg2, opcode, is_jmp32);
 }
 
@@ -17707,15 +17735,14 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 		return false;
 
 	/* 根据各种对比条件来找出pkt valid的branch，然后做一定的标记。这里的标记
-	 * 有2种：更新对应的寄存器的range为AT_PKT_END或者BEYOND_PKT_END。
+	 * 有2种：在invalid分支将寄存器标记为AT_PKT_END或者BEYOND_PKT_END；
+	 * 在valid分支将寄存器及其关联的寄存器的range修改为寄存器的右边界。
 	 *
-	 * AT_PKT_END：表示寄存器的可访问最大值等于pkt_end，也就是指向包的结尾了；
-	 * BEYOND_PKT_END：表示寄存器的可访问最大值大于pkt_end，也就是指向包的
-	 * 结尾之外了（至少比pkt_end大1个字节）。
+	 * AT_PKT_END：代表寄存器的值不小于报文skb->data_end；
+	 * BEYOND_PKT_END：表示寄存器的值超过了skb->data_end。
 	 *
-	 * 后面再读取这个寄存器地址的内容的时候，就会使用AT_PKT_END作为有效的range
-	 * 来进行内存合法性检查。可以看出来，对于网络报文数据的访问，是直接将true
-	 * 分支的寄存器进行标记来识别有效性的。
+	 * 后面再读取这个寄存器地址的内容的时候，就会使用reg->range作为有效的range
+	 * 来进行内存合法性检查。
 	 *
 	 * 这里不仅会更新当前寄存器的状态，还会更新所有的关联（id一致）寄存器的状态，
 	 * 将其range更新为较大值。比如：
@@ -17723,7 +17750,8 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	 *   a = pkt + c;
 	 *   if (a < pkt_end)
 	 *     // 在这个路径里面，会更新和a有关联的寄存器的range为100
-	 *     // 同时，在这个路径里面会将寄存器a的range标记为AT_PKT_END
+	 *     // 同时，在else路径里面会将寄存器a的range标记为AT_PKT_END
+	 *     // 注意：这里的a代表dst_reg, pkt_end代表src_reg。
 	 */
 	switch (BPF_OP(insn->code)) {
 	case BPF_JGT:
@@ -17731,7 +17759,17 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 		     src_reg->type == PTR_TO_PACKET_END) ||
 		    (dst_reg->type == PTR_TO_PACKET_META &&
 		     reg_is_init_pkt_pointer(src_reg, PTR_TO_PACKET))) {
-			/* pkt_data' > pkt_end, pkt_meta' > pkt_data */
+			/* 这里的逻辑是：
+			 *   if (dst_reg > src_reg) goto xx;
+			 * 其中，src_reg代表pkt_end，this_branch是好的分支，
+			 * other_branch是差的分支。
+			 *
+			 * 在好的分支中，会更新当前以及所有的关联的寄存器的range
+			 * 为当前寄存器的右边界。
+			 *
+			 * 对于坏的分支，会将寄存器的range标记为AT_PKT_END，
+			 * 代表不可访问。
+			 */
 			find_good_pkt_pointers(this_branch, dst_reg,
 					       dst_reg->type, false);
 			mark_pkt_end(other_branch, insn->dst_reg, true);
@@ -17929,6 +17967,9 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
+	/* 可以看出来，this_branch代表的是当前fallthrough的分支，other_branch
+	 * 代表的是else分支。
+	 */
 	struct bpf_verifier_state *this_branch = env->cur_state;
 	struct bpf_verifier_state *other_branch;
 	struct bpf_reg_state *regs = this_branch->frame[this_branch->curframe]->regs;
@@ -17941,7 +17982,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	int pred = -1;
 	int err;
 
-	/* Only conditional jumps are expected to reach here. */
+	/* 异常检查，这个应该不会发生的。 */
 	if (opcode == BPF_JA || opcode > BPF_JCOND) {
 		verbose(env, "invalid BPF_JMP/JMP32 opcode %x\n", opcode);
 		return -EINVAL;
@@ -17972,19 +18013,20 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		return 0;
 	}
 
-	/* check src2 operand */
+	/* 对比是需要读取寄存器内容的，因此这里首先对目的寄存器进行了源操作数检查 */
 	err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 	if (err)
 		return err;
 
 	dst_reg = &regs[insn->dst_reg];
+	/* 针对是reg2reg还是reg2imm两种情况，分别做检查。 */
 	if (BPF_SRC(insn->code) == BPF_X) {
 		if (insn->imm != 0) {
 			verbose(env, "BPF_JMP/JMP32 uses reserved fields\n");
 			return -EINVAL;
 		}
 
-		/* check src1 operand */
+		/* reg2reg的情况，对源寄存器也做源操作数检查，因为也要读取源寄存器 */
 		err = check_reg_arg(env, insn->src_reg, SRC_OP);
 		if (err)
 			return err;
@@ -18003,6 +18045,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		if (dst_reg->type == PTR_TO_STACK)
 			insn_flags |= INSN_F_DST_REG_STACK;
 	} else {
+		/* 看起来只有reg0寄存器才能直接和imm做比较 */
 		if (insn->src_reg != BPF_REG_0) {
 			verbose(env, "BPF_JMP/JMP32 uses reserved fields\n");
 			return -EINVAL;
@@ -18019,6 +18062,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			insn_flags |= INSN_F_DST_REG_STACK;
 	}
 
+	/* 看起来如果branch涉及到栈里面的数据，那么需要将这个branch记录下来。 */
 	if (insn_flags) {
 		err = push_jmp_history(env, this_branch, insn_flags, 0);
 		if (err)
@@ -18026,10 +18070,11 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	}
 
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
+	/* 进行具体的分支预测逻辑，返回值>=0意味着分支可以被预测。 */
 	pred = is_branch_taken(dst_reg, src_reg, opcode, is_jmp32);
 	if (pred >= 0) {
-		/* If we get here with a dst_reg pointer type it is because
-		 * above is_branch_taken() special cased the 0 comparison.
+		/* 对于可以进行分支预测的情况，将涉及到的寄存器及其相关的寄存器都进行
+		 * “精确”标记。经过标记的寄存器，必须要保持“精度”才行。
 		 */
 		if (!__is_pointer_value(false, dst_reg))
 			err = mark_chain_precision(env, insn->dst_reg);
@@ -18040,6 +18085,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
+	/* 针对可以预测的场景，直接取下一条要执行的指令，不需要做过多的处理。 */
 	if (pred == 1) {
 		/* Only follow the goto, ignore fall-through. If needed, push
 		 * the fall-through branch for simulation under speculative
@@ -18085,7 +18131,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
-	/* pred为0或1时不会分叉；到这里表示需要压栈另一条分支。 */
+	/* 针对不可预测的情况。pred为0或1时不会分叉；到这里表示需要压栈另一条分支。 */
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
 	if (IS_ERR(other_branch))
 		return PTR_ERR(other_branch);
@@ -18147,6 +18193,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	 * could be null even without PTR_MAYBE_NULL marking, so
 	 * only propagate nullness when neither reg is that type.
 	 */
+	/* 这里针对指针和指针的对比，进一步对寄存器进行track跟踪。如果一个指针
+	 * 不为NULL，那么在他们BPF_JEQ的路径上，将另外一个寄存器也标记为非NULL。
+	 */
 	if (!is_jmp32 && BPF_SRC(insn->code) == BPF_X &&
 	    __is_pointer_value(false, src_reg) && __is_pointer_value(false, dst_reg) &&
 	    type_may_be_null(src_reg->type) != type_may_be_null(dst_reg->type) &&
@@ -18177,6 +18226,14 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	 * known to be 0.
 	 * NOTE: these optimizations below are related with pointer comparison
 	 *       which will never be JMP32.
+	 */
+	/* 和上面类似，对于将指针和 NULL 对比的情况（且指针可为 NULL），将对应的
+	 * 分支上的寄存器状态进行标记（为空或者不为空）。为空，即将寄存器设置为
+	 * 常量 0。
+	 *
+	 * 这里既支持和立即数 0 对比，也支持和已经被证明为 NULL 的寄存器对比。
+	 * 针对网络报文，这里也会做特殊的处理，具体参考 try_match_pkt_pointers()
+	 * 的实现。
 	 */
 	if (!is_jmp32 && (opcode == BPF_JEQ || opcode == BPF_JNE) &&
 	    type_may_be_null(dst_reg->type) &&
@@ -21515,6 +21572,12 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * for which reference_state must match caller reference
 	 * state when it exits.
 	 */
+	/* 检查是否存在资源泄露。这里的资源泄漏，主要为引用是否泄露，比如rcu_read_lock
+	 * 是否解锁了、是否有指针类型的引用没有释放等，这些信息都可以从当前栈帧的
+	 * 状态里面获取到。注意，这里只会检查BPF程序彻底退出的情况，即main exit或者
+	 * 遇到bpf_throw()。针对main，需要保证当前是首栈帧。这里可以看出来，
+	 * 资源的获取和释放是可以在不同的static subprog进行的。
+	 */
 	int err = check_resource_leak(env, exception_exit,
 				      !env->cur_state->curframe,
 				      "BPF_EXIT instruction in main prog");
@@ -21533,8 +21596,11 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	if (exception_exit)
 		return PROCESS_BPF_EXIT;
 
+	/* 如果当前不是main prog的exit，说明当前是subprog，那么就退出当前栈帧。 */
 	if (env->cur_state->curframe) {
-		/* exit from nested function */
+		/* 这里会同时将当前栈帧的r0寄存器拷贝到上一级栈帧的r0寄存器中，实现
+		 * 返回值的跟踪效果。
+		 */
 		err = prepare_func_exit(env, &env->insn_idx);
 		if (err)
 			return err;
@@ -21543,13 +21609,10 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	}
 
 	/*
-	 * Return from a regular global subprogram differs from return
-	 * from the main program or async/exception callback.
-	 * Main program exit implies return code restrictions
-	 * that depend on program type.
-	 * Exit from exception callback is equivalent to main program exit.
-	 * Exit from async callback implies return code restrictions
-	 * that depend on async scheduling mechanism.
+	 * 按退出路径分类检查返回值（R0）。
+	 * 普通 global subprog 的返回值约束与主程序、异步回调和异常回调不同：
+	 * 主程序和异常回调遵循 prog type 的返回值约束，异步回调遵循对应调度
+	 * 机制的约束。
 	 */
 	if (cur_frame->subprogno &&
 	    !cur_frame->in_async_callback_fn &&
@@ -21607,6 +21670,9 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	int i;
 
 	dst_reg = reg_state(env, insn->dst_reg);
+	/* 寄存器（变量）的类型必须是指向BPF_MAP_TYPE_INSN_ARRAY类型的MAP中的某个
+	 * 指令。
+	 */
 	if (dst_reg->type != PTR_TO_INSN) {
 		verbose(env, "R%d has type %s, expected PTR_TO_INSN\n",
 			     insn->dst_reg, reg_type_str(env, dst_reg->type));
@@ -21621,6 +21687,7 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 			    "R%d has incorrect map type %d", insn->dst_reg, map->map_type))
 		return -EFAULT;
 
+	/* 检查要跳转的指令（寄存器track范围）没有超过范围（对应没有超过label数组的边界） */
 	err = indirect_jump_min_max_index(env, insn->dst_reg, map, &min_index, &max_index);
 	if (err)
 		return err;
@@ -21633,6 +21700,7 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 			return -ENOMEM;
 	}
 
+	/* n是经过排序后，可能跳转到的非重复的地址的数量 */
 	n = copy_insn_array_uniq(map, min_index, max_index, env->gotox_tmp_buf->items);
 	if (n < 0)
 		return n;
@@ -21642,12 +21710,14 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 		return -EINVAL;
 	}
 
+	/* 遍历所有可能跳转到的地址，将其push到branch里面，类似于产生了很多个条件跳转 */
 	for (i = 0; i < n - 1; i++) {
 		other_branch = push_stack(env, env->gotox_tmp_buf->items[i],
 					  env->insn_idx, env->cur_state->speculative);
 		if (IS_ERR(other_branch))
 			return PTR_ERR(other_branch);
 	}
+	/* 选取其中最后一个branch作为当前要进行检查的branch */
 	env->insn_idx = env->gotox_tmp_buf->items[n-1];
 	return 0;
 }
@@ -21761,6 +21831,9 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 		} else if (opcode == BPF_JA) {
 			/* 绝对地址跳转（goto xxx或者goto dst_reg）。 */
 			if (BPF_SRC(insn->code) == BPF_X) {
+				/* 这里是针对indirect jump的情况，是新特性，用来代替
+				 * 大规模的switch->goto的。
+				 */
 				if (insn->src_reg != BPF_REG_0 ||
 				    insn->imm != 0 || insn->off != 0) {
 					verbose(env, "BPF_JA|BPF_X uses reserved fields\n");
@@ -21778,12 +21851,16 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				return -EINVAL;
 			}
 
+			/* 绝对跳转的逻辑，直接将下一条要检查的逻辑更新为跳转到的指令
+			 * 即可。
+			 */
 			if (class == BPF_JMP)
 				env->insn_idx += insn->off + 1;
 			else
 				env->insn_idx += insn->imm + 1;
 			return 0;
 		} else if (opcode == BPF_EXIT) {
+			/* 简单的合法性检查 */
 			if (BPF_SRC(insn->code) != BPF_K ||
 			    insn->imm != 0 ||
 			    insn->src_reg != BPF_REG_0 ||
@@ -21968,6 +22045,9 @@ static int do_check(struct bpf_verifier_env *env)
 			if (marks_err)
 				return marks_err;
 		}
+		/* 检查不通过，且当前处于推测分支，那么就将当前指令设置为nospec，
+		 *然后结束当前分支。
+		 */
 		if (error_recoverable_with_nospec(err) && state->speculative) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
@@ -21981,6 +22061,7 @@ static int do_check(struct bpf_verifier_env *env)
 		} else if (err < 0) {
 			return err;
 		} else if (err == PROCESS_BPF_EXIT) {
+			/* 走到了当前分支的最后一条指令，结束当前分支 */
 			goto process_bpf_exit;
 		}
 		WARN_ON_ONCE(err);
@@ -22013,6 +22094,10 @@ process_bpf_exit:
 			err = bpf_update_live_stack(env);
 			if (err)
 				return err;
+			/* 将当前的branch从stack中弹出，同时将下一条指令设置为
+			 * 当前栈顶的branch对应的第一条指令。这里的栈中的branch
+			 * 是在check_cond_jmp_op中，针对条件跳转而产生的。
+			 */
 			err = pop_stack(env, &prev_insn_idx, &env->insn_idx,
 					pop_log);
 			if (err < 0) {
@@ -22890,21 +22975,29 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
 
-	/* Should be called before bpf_remove_insns, as it uses prog->insnsi */
+	/* 清除相关的指令元数据信息，要在bpf_remove_insns（删除指令）之前调用，因为这里还是会
+	 * 使用到指令信息的。
+	 */
 	clear_insn_aux_data(env, off, cnt);
 
+	/* 将指令移除，同时对JMP/CALL类指令进行调整和适配 */
 	err = bpf_remove_insns(env->prog, off, cnt);
 	if (err)
 		return err;
 
+	/* 指令移除后，修正所有的subprog的start、end。对于完全被覆盖的subprog，直接
+	 * 将其移除掉。
+	 */
 	err = adjust_subprog_starts_after_remove(env, off, cnt);
 	if (err)
 		return err;
 
+	/* 修正指令和line的对应关系 */
 	err = bpf_adj_linfo_after_remove(env, off, cnt);
 	if (err)
 		return err;
 
+	/* 修正insn array（indirect jmp）中的偏移信息。 */
 	adjust_insn_arrays_after_remove(env, off, cnt);
 
 	memmove(aux_data + off,	aux_data + off + cnt,
@@ -23387,7 +23480,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		}
 
 		/* 对于窄访问，将其访问指令替换为对字段的访问（4/8字节）。
-		 * 在访问完成后，再对寄存器中的数据进行位便宜操作，恢复
+		 * 在访问完成后，再对寄存器中的数据进行位偏移操作，恢复
 		 * 为窄访问的数据。
 		 */
 
@@ -23410,7 +23503,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				verifier_bug(env, "narrow ctx load misconfigured");
 				return -EFAULT;
 			}
-			/* 计算出来要进行的位便宜的位数。对于大小端，这里还不
+			/* 计算出来要进行的位偏移的位数。对于大小端，这里还不
 			 * 一样。以对32位数据data的访问为例，如果当前系统是大
 			 * 端，那么((u8 *)data)[0]等于data>>24，即：
 			 * shift = (size_default - (off + size)) * 8
@@ -24203,7 +24296,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		}
 
-		/* Make it impossible to de-reference a userspace address */
+		/* 检查要probe读取的地址是否是内核态的，对于用户态的地址会直接跳过，
+		 * 因为这个无法触发缺页异常，从而走到BPF的handler那里。
+		 */
 		if (BPF_CLASS(insn->code) == BPF_LDX &&
 		    (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
 		     BPF_MODE(insn->code) == BPF_PROBE_MEMSX)) {
@@ -26901,37 +26996,58 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
-	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。先对主
-	 * prog进行检查，然后对subprog进行检查。
+	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。
+	 * 注意：这里只检查main prog和static subprog，而不会检查global subprog。
+	 * 具体可以参考`check_func_call`的实现。
 	 */
 	ret = do_check_main(env);
-	/* 这里是检查global subprog的地方，上面的检查不会深入global func进行检查 */
+	/* 这里是检查global subprog的地方，上面的检查不会深入global func进行检查。
+	 * 需要注意，exception callback本身也会被当作global subprog来进行检查的。
+	 */
 	ret = ret ?: do_check_subprogs(env);
 
+	/* 如果是offload的程序，调用驱动层面的finalize钩子函数 */
 	if (ret == 0 && bpf_prog_is_offloaded(env->prog->aux))
 		ret = bpf_prog_offload_finalize(env);
 
 skip_full_check:
 	kvfree(env->explored_states);
 
-	/* might decrease stack depth, keep it before passes that
-	 * allocate additional slots.
+	/* 对于fastcall的场景，将所有的被mark_fastcall_patterns标记的指令修改为
+	 * nop指令，同时更新最深栈大小（减去fastcall所占用的栈空间）。
 	 */
 	if (ret == 0)
 		ret = remove_fastcall_spills_fills(env);
 
+	/* 处理（设置）BPF私有栈的。对于一些BPF类型，比如TRACING、KPROBE等，会在JIT
+	 * 阶段分配一个per cpu的内存，然后将其保存到R9寄存器中，并将所有的指令中的
+	 * SP寄存器修改为R9寄存器，从而实现私有栈的效果。
+	 */
 	if (ret == 0)
 		ret = check_max_stack_depth(env);
 
-	/* instruction rewrites happen after this point */
+	/* 上面的代码只做检查，不做BPF指令的修改。从这里开始，就会涉及到BPF指令的
+	 * 修改（优化），比如函数内敛等。
+	 *
+	 * 这里是对bpf_loop()的优化，用来将其进行inline内联，从而达到优化性能的作用。
+	 * 这个是不是可以直接放到do_misc_fixups()里面来进行？
+	 */
 	if (ret == 0)
 		ret = optimize_bpf_loop(env);
 
+	/* 对于有权限的BPF程序，这里会进行代码优化（清理） */
 	if (is_priv) {
+		/* 针对条件跳转指令的优化，如果条件跳转的逻辑是可推测的（其中一个
+		 * 分支没有走到*过*），那么就将这个条件跳转替换为绝对跳转指令。
+		 */
 		if (ret == 0)
 			opt_hard_wire_dead_code_branches(env);
+		/* 移除不可达的代码（检查器阶段，没有走到对应的指令），例如上边的
+		 * 条件跳转永不可达的逻辑代码。
+		 */
 		if (ret == 0)
 			ret = opt_remove_dead_code(env);
+		/* 移除非必要的NOP指令 */
 		if (ret == 0)
 			ret = opt_remove_nops(env);
 	} else {
@@ -26939,18 +27055,32 @@ skip_full_check:
 			sanitize_dead_code(env);
 	}
 
+	/* 遍历所有的指令，对涉及到读写的指令（不仅仅是PTR_TO_CTX类型）进行重写。
+	 * 如果当前的指令是PTR_TO_CTX类型的，那么直接调用当前PROG类型的钩子函数进行
+	 * convert。
+	 *
+	 * 对于其他的类型，这里会case by case进行转换。比如，对于PTR_TO_SOCKET
+	 * 类型的指针的访问，会调用bpf_sock_convert_ctx_access来将其对struct bpf_sock
+	 * 的访问重写为对struct sock的访问。
+	 *
+	 * 对于PTR_TO_BTF_ID，会将其修改为BPF_PROBE_MEM，从而实现在JIT期间对内存
+	 * 进行probe读取。
+	 *
+	 * 这里还会进行“窄”访问的处理。比如，某个字段在sock中是int，但是在bpf_sock中
+	 * 是long，这种在读取完后，还要进行处理，才能保证数据一致。
+	 */
 	if (ret == 0)
-		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = convert_ctx_accesses(env);
 
-	/* 这里会进行各种fixup，比如一些函数的内联等。可以看出来，这里的操作都是
-	 * 通过BPF检查之后才进行的。
+	/* 这里会进行各种fixup，比如一些函数的内联等。这里做的事情比较多，有优化的，
+	 * 也有安全加固的，比如针对BPF_PROBE_MEM，确保其读取的地址在内核态地址范围内
+	 * 等。
 	 */
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 
-	/* do 32-bit optimization after insn patching has done so those patched
-	 * insns could be handled correctly.
+	/* 针对32位的数据读取指令，判断是否需要对寄存器进行零扩展，即清空未使用的高
+	 * 32位寄存器。
 	 */
 	if (ret == 0 && !bpf_prog_is_offloaded(env->prog->aux)) {
 		ret = opt_subreg_zext_lo32_rnd_hi32(env, attr);
@@ -26958,6 +27088,7 @@ skip_full_check:
 								     : false;
 	}
 
+	/* 这里是进行BPF JIT的地方。这部分比较复杂，就不展开讲了。 */
 	if (ret == 0)
 		ret = fixup_call_args(env);
 
@@ -26980,6 +27111,7 @@ skip_full_check:
 	if (ret)
 		goto err_release_maps;
 
+	/* 将使用到的一些资源信息保存到prog->aux中 */
 	if (env->used_map_cnt) {
 		/* if program passed verifier, update used_maps in bpf_prog_info */
 		env->prog->aux->used_maps = kmalloc_objs(env->used_maps[0],
@@ -27009,6 +27141,7 @@ skip_full_check:
 		       sizeof(env->used_btfs[0]) * env->used_btf_cnt);
 		env->prog->aux->used_btf_cnt = env->used_btf_cnt;
 	}
+	/* 对于内存加载指令，除了BPF_PSEUDO_FUNC的情况，将src_reg清空（已经用不到了） */
 	if (env->used_map_cnt || env->used_btf_cnt) {
 		/* program is valid. Convert pseudo bpf_ld_imm64 into generic
 		 * bpf_ld_imm64 instructions
@@ -27016,6 +27149,7 @@ skip_full_check:
 		convert_pseudo_ld_imm64(env);
 	}
 
+	/* 修正记录的函数（BTF TYPE）中的指令偏移 */
 	adjust_btf_func(env);
 
 err_release_maps:

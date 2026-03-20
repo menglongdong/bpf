@@ -334,6 +334,7 @@ struct tcp_sock {
 		accecn_opt_demand:2,/* Demand AccECN option for n next ACKs */
 		prev_ecnfield:2; /* ECN bits from the previous segment */
 	__be32	pred_flags;
+	/* tcp_mstamp的缓存，只不过单位是ns */
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
 	/* 最近一次收到或者发送报文的时间戳，约等于当前时间，它的单位是us。在以下情况
 	 * 下，它会被刷新：
@@ -344,6 +345,7 @@ struct tcp_sock {
 	 * - 发送rst的时候
 	 * - 收到或者发送携带数据的报文之前。
 	 * 可以看出来，在任何报文发送之前，都会刷新这个mstamp，包括ack报文。
+	 * 注意，这个取的是ktime_get()，即开机时间。
 	 */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	/* 下一个要接收的数据 */
